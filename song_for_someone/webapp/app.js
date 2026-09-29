@@ -516,6 +516,7 @@
     }
 
     renderDetails(summary);
+    renderReproduce(result.reproduce);
     show('screen-result');
   }
 
@@ -534,6 +535,48 @@
     $('result-details').innerHTML = rows.map(function (row) {
       return '<div class="detail-row"><dt>' + esc(row[0]) + '</dt><dd>' + esc(row[1] == null ? '—' : row[1]) + '</dd></div>';
     }).join('');
+  }
+
+  function renderReproduce(command) {
+    var block = $('reproduce-block');
+    var node = $('reproduce-text');
+    if (command) {
+      // 命令行原文放在折叠区里，等宽显示、可一键复制。
+      // 这是给「会电脑的」读者的进阶入口：同一件东西，网页里能做，命令行也能做。
+      node.textContent = command;
+      block.classList.remove('hidden');
+    } else {
+      node.textContent = '';
+      block.classList.add('hidden');
+    }
+  }
+
+  function copyReproduce() {
+    var text = $('reproduce-text').textContent || '';
+    if (!text) { return; }
+    var button = $('btn-copy-reproduce');
+    var flash = function () {
+      button.textContent = '已复制';
+      setTimeout(function () { button.textContent = '复制'; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(flash).catch(function () { fallbackCopy(text, flash); });
+    } else {
+      fallbackCopy(text, flash);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    var area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'absolute';
+    area.style.left = '-9999px';
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); } catch (err) { /* 复制不了就算了，命令就在眼前 */ }
+    document.body.removeChild(area);
+    done();
   }
 
   function handleTaskError(error) {
@@ -705,6 +748,7 @@
 
     $('btn-again').addEventListener('click', function () { show('screen-form'); submitGenerate(); });
     $('btn-edit').addEventListener('click', function () { show('screen-form'); });
+    $('btn-copy-reproduce').addEventListener('click', copyReproduce);
 
     $('btn-error-retry').addEventListener('click', function () { show('screen-form'); submitGenerate(); });
     $('btn-error-doctor').addEventListener('click', function () { loadDoctor(); show('screen-env'); });

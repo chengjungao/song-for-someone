@@ -318,6 +318,9 @@ class TestGenerate(WebTestCase):
         # 结果里带元数据
         self.assertEqual(data["result"]["bpm"], 77)
         self.assertEqual(data["result"]["key"], "D major")
+        # 复现命令原文（完成页的折叠区要显示它，供会命令行的读者复制）
+        self.assertIn("sfs make", data["result"]["reproduce"])
+        self.assertEqual(data["result"]["summary"]["language"], "zh")
 
     def test_busy_returns_409(self):
         blocker = web.store.try_acquire_generation()

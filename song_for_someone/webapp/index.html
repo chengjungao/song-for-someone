@@ -133,7 +133,16 @@
         </div>
         <div id="result-files" class="result-files"></div>
         <details class="advanced">
-          <summary>这首歌用到的设置</summary>
+          <summary>想自己动手跑一遍？</summary>
+          <p class="note">下面这行命令能复现这首歌，会电脑的可以直接用。</p>
+          <div id="reproduce-block" class="reproduce-block hidden">
+            <div class="reproduce-head">
+              <span>复现这首歌的命令</span>
+              <button id="btn-copy-reproduce" class="link-btn" type="button">复制</button>
+            </div>
+            <pre id="reproduce-text" class="reproduce-text"></pre>
+          </div>
+          <p class="note sub-label">这首歌用到的设置</p>
           <dl id="result-details" class="detail-list"></dl>
         </details>
       </div>

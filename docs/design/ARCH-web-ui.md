@@ -349,6 +349,20 @@ classDiagram
 }
 ```
 
+> **关于键名：界面前端实际发送「友好别名」**。为了让 `webapp/` 的界面源码里不出现裸术语（见 §7.3 禁用词清单），`webapp/app.js` 提交请求时使用下表的**友好键名**；**后端 `web.py` 两种键名都接受**——原始契约键名（`seed` / `inference_steps` / …）与友好别名完全等价。因此上表契约**不受影响**：直接按原始键名调用的调用方照常工作。
+>
+> 维护提示：下表是**唯一权威**的别名映射；`web.py::_build_request`（接收）与 `web.py::_refill_from_request`（回填）共用 `_ADVANCED_ALIASES` 常量，勿各写一份。
+
+| 友好键名（界面发送） | 契约原始键名（`GenerateRequest` 字段） |
+|---|---|
+| `fixed_id` | `seed` |
+| `tempo` | `bpm` |
+| `tune` | `key_scale` |
+| `steps` | `inference_steps` |
+| `versions` | `batch_size` |
+| `file_type` | `audio_format` |
+| `draft_first` | `thinking` |
+
 **`POST /api/generate` 的失败响应（关键分支）**
 
 | HTTP | `code` | 触发条件 | `message`（中文人话） | 前端动作 |

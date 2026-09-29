@@ -37,6 +37,37 @@ python start.py          # 或 Windows 上双击 启动.bat
   和临时目录，**不要**依赖真实显卡或真实 ACE-Step 服务。
 - 提交信息用中文，说清「改了什么、为什么」。
 
+## 界面文案的禁用词（含一处精确例外）
+
+面向普通用户的界面文案里，**不许**出现这些裸术语（它们是代码里的字段名，普通人看不懂）：
+
+```text
+caption  inference_steps  batch_size  guidance_scale  task_type
+key_scale  time_signature  audio_duration  vocal_language  audio_format
+seed（单独出现时）  traceback  Traceback  HTTP 4  HTTP 5  Exception
+%completed  完成 xx%  剩余 00:
+```
+
+自检（对 `song_for_someone/webapp/` 全目录）：
+
+```bash
+grep -rnE 'caption|inference_steps|batch_size|guidance_scale|task_type|key_scale|time_signature|audio_duration|vocal_language|audio_format|traceback|Exception' song_for_someone/webapp/
+```
+
+### 唯一例外：完成页折叠区里的「复现命令」原文
+
+`webapp/app.js` 会把后端返回的 `reproduce`（形如
+`sfs make --caption "…" --lyrics-file <歌词文件> --duration 120`）**原样**显示在
+**默认收起的折叠区**里（等宽字体 + 一键复制）。这里**允许**出现 `--caption` /
+`--seed` 等 **CLI 的真实参数名**，因为它是**可复制执行的命令原文**，不是面向普通用户的说明文案：
+
+- 一旦把参数名改得「更好懂」，这条命令就复制不动了，功能等于没做；
+- 它默认收起，普通用户不展开就看不到，不构成打扰；
+- 它是留给「想更进一步」的读者的命令行入口——这正是本项目区别于普通工具的价值。
+
+**例外范围精确限定在这个折叠区**（DOM 里是 `#reproduce-block`），不复盖其它任何界面文案，
+也不允许把 `caption` 之类的词挪到折叠区以外的地方。
+
 ## 许可
 
 MIT，见 `LICENSE`。提交即表示你同意按此许可分发你的贡献。
