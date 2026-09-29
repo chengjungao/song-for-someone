@@ -1,0 +1,91 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant UI as app.js（界面）
+    participant W as web.py
+    participant ST as TaskStore
+    participant G as GenerationWorker(线程)
+    participant K as AceStepClient
+    participant S as ACE-Step 服务(8001)
+    participant FS as songs/
+
+    Note over W: 启动：绑定 127.0.0.1:8770(占用则顺延)→打印实际端口→就绪后 webbrowser.open
+    U->>UI: 双击 启动.bat → 浏览器自动打开
+    UI->>W: GET /api/meta
+    W-->>UI: 10 个风格模板 + 时长选项 + 上限
+    UI->>W: GET /api/env
+    W->>S: socket 连接 + /health（≤2s）
+    W-->>UI: {service_ok:true}（右上角「环境 正常」）
+
+    loop 输入过程中（防抖 500ms）
+        UI->>W: POST /api/lyrics/check {lyrics}
+        W->>W: lyrics.analyze(text)
+        W-->>UI: LyricsReport（分级渲染 + 结构条）
+    end
+
+    U->>UI: 点「开始出歌」
+    UI->>W: POST /api/generate {prompt, lyrics, duration, out_prefix,…}
+    W->>W: lyrics.analyze → 无 error/warn 通过门禁
+    W->>ST: try_acquire_generation()
+    alt 锁可用
+        ST-->>W: True
+        W->>ST: create(TaskRecord, status=queued, estimated_total=…)
+        W->>G: thread.run(record)（daemon）
+        W-->>UI: 202 {task_id, estimated_total, out_name}
+    else 已被占用
+        ST-->>W: False
+        W-->>UI: 409 {code:"busy"}
+    end
+
+    G->>ST: record.status=running, started_at=now
+    G->>K: submit(request)
+    K->>S: POST /release_task
+    S-->>K: {data:{task_id}}
+    K-->>G: upstream_task_id
+    G->>ST: record.upstream_task_id=…
+
+    loop 前端 1s 轮询 / 前端内部 200ms 插值
+        UI->>W: GET /api/task/{id}
+        W->>ST: get(id) → elapsed=now-started_at
+        ST-->>W: record
+        W-->>UI: {status:running, elapsed, estimated_total}
+        Note over UI: 200ms 定时器本地插值 → 平滑推进，封顶 90%
+    end
+
+    loop 服务端每 5s 一次（AceStepClient.wait interval=5.0）
+        K->>S: POST /query_result
+        S-->>K: status=0（生成中）
+        K->>ST: on_progress(elapsed, 0)  更新心跳；检查 cancel_flag
+    end
+
+    S-->>K: status=1 + result[{file,metas}]
+    K-->>G: [TaskResult,…]
+    G->>ST: record.phase=finalizing
+    loop 每个结果（batch）
+        G->>K: download(file_url, out_path)
+        K->>S: GET /v1/audio?…
+        S-->>K: 音频字节
+        K->>FS: 写 <out_name>（+ _i 后缀当 batch>1）
+    end
+    G->>FS: common.write_sidecar(out_path, req, results, elapsed, preset)
+    G->>ST: record.status=done, result={files,duration,bpm,key_scale,reproduce,params}
+    ST->>ST: release_generation(); session_has_success=True
+
+    UI->>W: GET /api/task/{id} → {status:done, result}
+    UI->>W: GET /media/<out_name>  (Range) → 音频流
+    W-->>UI: 206 音频字节 → <audio> 播放
+    U->>UI: 点「下载到电脑」
+    UI->>W: GET /download/<out_name>
+    W-->>U: 附件下载（Content-Disposition, UTF-8 文件名）
+
+    Note over U,S: —— 环境异常分支 ——
+    K--x S: 连接失败
+    K-->>G: raise ServiceUnreachable
+    G->>ST: status=failed; error.code=service_unreachable
+    G->>ST: release_generation()
+    UI->>W: GET /api/task/{id} → {status:failed, error}
+    UI-->>U: 环境异常页（三步指引 + 我再试一次 + 查看完整自检）
+    U->>UI: 点「查看完整环境自检」
+    UI->>W: GET /api/doctor
+    W->>W: run_doctor()（工作线程，可能慢）
+    W-->>UI: DoctorReport（title/level_label/detail/fix；skip 显示「跳过」）

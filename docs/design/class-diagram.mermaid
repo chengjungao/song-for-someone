@@ -1,0 +1,157 @@
+classDiagram
+    direction LR
+
+    class ThreadingHTTPServer {
+        +daemon_threads = True
+        +serve_forever()
+        +server_close()
+        +server_address
+    }
+    class RequestHandler {
+        +do_GET()
+        +do_POST()
+        -_json(ok, data, error, status)
+        -_read_json_body() dict
+        -_serve_static(path)
+        -_serve_media(name, as_download)
+        -_send_bytes(path, ctype, range_ok)
+    }
+    class TaskStore {
+        -_tasks : Dict~str,TaskRecord~
+        -_tasks_lock : Lock
+        -_generation_lock : Lock
+        +create(params) TaskRecord
+        +get(task_id) TaskRecord
+        +current() TaskRecord
+        +try_acquire_generation() bool
+        +release_generation() void
+        +reset() void
+    }
+    class TaskRecord {
+        +task_id : str
+        +status : str
+        +started_at : float
+        +finished_at : float
+        +estimated_total : float
+        +out_name : str
+        +request_obj : GenerateRequest
+        +preset : StylePreset
+        +upstream_task_id : str
+        +result : dict
+        +error : dict
+        +cancel_flag : Event
+        +elapsed() float
+        +to_public() dict
+    }
+    class GenerationWorker {
+        +run(record, client_factory)
+        -_submit(client)
+        -_wait(client)
+        -_download(client, results)
+    }
+
+    class AceStepClient {
+        +submit(req) str
+        +wait(id, timeout, interval, on_progress) List~TaskResult~
+        +query(ids)
+        +download(url, path) Path
+        +health() bool
+    }
+    class GenerateRequest {
+        +prompt : str
+        +lyrics : str
+        +audio_duration : float
+        +inference_steps : int
+        +batch_size : int
+        +audio_format : str
+        +seed : Optional~int~
+        +bpm : Optional~int~
+        +key_scale : str
+        +time_signature : str
+        +thinking : bool
+        +guidance_scale : float
+        +task_type : str
+        +to_payload() dict
+    }
+    class TaskResult {
+        +file_url : str
+        +metas : dict
+        +bpm : Optional~int~
+        +key_scale : str
+        +duration : Optional~float~
+        +describe() str
+    }
+    class StylePreset {
+        +key : str
+        +name : str
+        +caption : str
+        +duration : float
+        +verified : bool
+        +note : str
+        +bpm : Optional~int~
+    }
+    class LyricsReport {
+        +sections : List~Section~
+        +issues : List~Issue~
+        +total_chars : int
+        +total_lines : int
+        +cjk_ratio : float
+        +has_structure : bool
+        +errors : List~Issue~
+        +warnings : List~Issue~
+        +hints : List~Issue~
+        +is_instrumental : bool
+        +ok : bool
+    }
+    class Issue {
+        +level : str
+        +code : str
+        +message : str
+        +section_index : Optional~int~
+    }
+    class Section {
+        +tag : str
+        +kind : str
+        +label : str
+        +lines : List~str~
+        +index : int
+        +max_line_width : int
+        +is_instrumental : bool
+    }
+    class DoctorReport {
+        +checks : List~Check~
+        +failed : List~Check~
+        +warned : List~Check~
+        +ok : bool
+    }
+    class Check {
+        +key : str
+        +title : str
+        +level : str
+        +detail : str
+        +fix : str
+    }
+    class common {
+        <<module>>
+        +human_duration(seconds) str
+        +default_out_name(prefix) str
+        +write_sidecar(out_path, req, results, elapsed, preset) void
+        +sanitize_filename_part(text, fallback) str
+    }
+
+    ThreadingHTTPServer o-- RequestHandler : instantiates
+    RequestHandler --> TaskStore : uses
+    RequestHandler --> common : uses
+    RequestHandler --> LyricsReport : serializes
+    RequestHandler --> DoctorReport : serializes
+    TaskStore "1" o-- "*" TaskRecord : holds
+    TaskRecord --> GenerateRequest : carries
+    TaskRecord --> StylePreset : carries
+    GenerationWorker --> TaskRecord : updates
+    GenerationWorker --> AceStepClient : drives
+    AceStepClient --> GenerateRequest : sends
+    AceStepClient --> TaskResult : returns
+    TaskRecord --> TaskResult : summarizes
+    LyricsReport "1" o-- "*" Issue : contains
+    LyricsReport "1" o-- "*" Section : contains
+    DoctorReport "1" o-- "*" Check : contains

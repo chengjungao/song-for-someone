@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>给某个人的一首歌</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>给某个人的一首歌</h1>
+      <p class="tagline">在你自己电脑上出一首完整的歌。不联网、不排队、不上传。</p>
+    </div>
+    <button id="env-badge" class="badge badge-idle" type="button" title="点一下重新检查环境">环境 检测中…</button>
+  </header>
+
+  <main>
+
+    <!-- ===================== 填写 ===================== -->
+    <section id="screen-form" class="screen">
+      <div class="step">
+        <h2><span class="step-no">1</span> 想要什么味道的歌</h2>
+        <select id="style-select" class="big"></select>
+        <p id="style-note" class="note"></p>
+        <label class="field-label" for="prompt-input">
+          风格描述 <small>（选好模板就自动填了，也可以自己改）</small>
+        </label>
+        <textarea id="prompt-input" rows="2" placeholder="温暖的中文流行民谣，木吉他为主……"></textarea>
+      </div>
+
+      <div class="step">
+        <h2><span class="step-no">2</span> 歌词</h2>
+        <textarea id="lyrics-input" rows="11"
+          placeholder="[Verse 1]&#10;那年冬天你把围巾留给我&#10;…&#10;&#10;[Chorus]&#10;生日快乐 我唱得不算好&#10;…"></textarea>
+        <div class="lyrics-meta">
+          <span id="lyrics-count">0 字 / 上限 4096</span>
+          <span id="lyrics-cjk">汉字占比 —</span>
+          <span class="spacer"></span>
+          <select id="example-select" class="mini">
+            <option value="">载入示例…</option>
+          </select>
+          <button id="btn-clear" class="link-btn" type="button">清空</button>
+        </div>
+        <div id="lyrics-check" class="check hidden"></div>
+      </div>
+
+      <div class="step">
+        <h2><span class="step-no">3</span> 歌多长</h2>
+        <div id="duration-options" class="chips"></div>
+      </div>
+
+      <div class="step">
+        <label class="field-label" for="out-prefix">
+          这是给谁做的 <small>（可选，会出现在文件名前面）</small>
+        </label>
+        <input id="out-prefix" type="text" maxlength="24" placeholder="例如：给妈妈">
+      </div>
+
+      <details id="advanced" class="advanced">
+        <summary>更多设置（一般不用动）</summary>
+        <div class="advanced-grid">
+          <label>固定编号
+            <small>填上它，下次用同样的设置能出一模一样的一首；不填就每次都不一样。</small>
+            <input id="field-fixed-id" type="number" placeholder="留空即可">
+          </label>
+          <label>每分钟多少拍
+            <small>不填让模型自己定，一般不用管。</small>
+            <input id="field-tempo" type="number" placeholder="留空即可">
+          </label>
+          <label>调式
+            <small>不填让模型自己定。例如填 G major。</small>
+            <input id="field-tune" type="text" placeholder="留空即可">
+          </label>
+          <label>生成步数
+            <small>默认 8。调大更慢，也不一定更好。</small>
+            <input id="field-steps" type="number" min="1" value="8">
+          </label>
+          <label>一次出几版
+            <small>想多听几个版本再挑，就调大。会多占显存。</small>
+            <input id="field-versions" type="number" min="1" max="8" value="1">
+          </label>
+          <label>文件格式
+            <small>一般用 mp3。想要无损可以选 wav 或 flac。</small>
+            <select id="field-file-type">
+              <option value="mp3">mp3</option>
+              <option value="wav">wav</option>
+              <option value="flac">flac</option>
+            </select>
+          </label>
+          <label class="check-row">让模型先打草稿
+            <small>开着质量更好、更慢。默认开。</small>
+            <input id="field-draft-first" type="checkbox" checked>
+          </label>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button id="btn-generate" class="primary" type="button">开始出歌</button>
+        <button id="btn-songs" class="ghost" type="button">我的作品</button>
+      </div>
+      <p id="form-hint" class="form-hint hidden"></p>
+    </section>
+
+    <!-- ===================== 生成中 ===================== -->
+    <section id="screen-progress" class="screen hidden">
+      <div class="progress-wrap">
+        <h2 id="progress-phase">正在准备…</h2>
+        <div id="progress-track" class="track"><div id="progress-bar" class="fill"></div></div>
+        <p id="progress-sub" class="sub"></p>
+        <p id="progress-lang" class="lang"></p>
+        <p class="disclaimer">这条进度是按以往耗时估算的，不是模型的真实进度。</p>
+        <p class="disclaimer soft">生成期间可以关掉这个页面，任务会继续跑完。回来点「我的作品」还能找到它。</p>
+        <div class="actions">
+          <button id="btn-env-from-progress" class="ghost" type="button">看看环境有没有问题</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 完成 / 出错 ===================== -->
+    <section id="screen-result" class="screen hidden">
+      <div id="result-success">
+        <h2 id="result-title">好了</h2>
+        <p id="result-name" class="result-name"></p>
+        <audio id="result-audio" controls preload="metadata"></audio>
+        <p id="result-meta" class="result-meta"></p>
+        <p id="result-lang" class="lang"></p>
+        <div class="actions">
+          <a id="result-download" class="primary" download>下载到电脑</a>
+          <button id="btn-again" class="ghost" type="button">再来一版</button>
+          <button id="btn-edit" class="ghost" type="button">改改歌词再出</button>
+        </div>
+        <div id="result-files" class="result-files"></div>
+        <details class="advanced">
+          <summary>这首歌用到的设置</summary>
+          <dl id="result-details" class="detail-list"></dl>
+        </details>
+      </div>
+
+      <div id="result-error" class="hidden">
+        <h2 id="error-title">这次没生成出来</h2>
+        <p id="error-message" class="error-message"></p>
+        <div class="actions">
+          <button id="btn-error-retry" class="primary" type="button">再来一次</button>
+          <button id="btn-error-doctor" class="ghost" type="button">查看完整环境自检</button>
+          <button id="btn-error-back" class="ghost" type="button">回到填写</button>
+        </div>
+        <details id="error-detail-wrap" class="advanced hidden">
+          <summary>技术细节（排查时看）</summary>
+          <pre id="error-detail" class="detail-pre"></pre>
+        </details>
+      </div>
+    </section>
+
+    <!-- ===================== 环境异常 ===================== -->
+    <section id="screen-env" class="screen hidden">
+      <h2 id="env-title">出歌的程序还没打开</h2>
+      <p id="env-lead" class="lead"></p>
+      <ol id="env-steps" class="steps-list">
+        <li>找到你解压 ACE-Step 的那个文件夹（名字里带 ACE-Step-1.5）。</li>
+        <li>双击里面的 <code>start_api_server.bat</code>。</li>
+        <li>等它出现一行带 8001 的字，再回到这里点「我再试一次」。</li>
+      </ol>
+      <div class="actions">
+        <button id="btn-retry" class="primary" type="button">我再试一次</button>
+        <button id="btn-doctor" class="ghost" type="button">查看完整环境自检</button>
+        <button id="btn-back-form" class="ghost" type="button">回到填写</button>
+      </div>
+      <div id="doctor-panel" class="doctor-panel hidden"></div>
+    </section>
+
+    <!-- ===================== 我的作品 ===================== -->
+    <section id="screen-songs" class="screen hidden">
+      <div class="section-head">
+        <h2>我出过的歌</h2>
+        <button id="btn-back-form-2" class="ghost" type="button">回到出歌</button>
+      </div>
+      <div id="songs-list" class="songs-list"></div>
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    <span>歌在你的电脑上，不出门。关掉启动窗口即停止。</span>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

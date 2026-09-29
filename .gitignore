@@ -1,0 +1,68 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# --- 测试与检查 ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- 本项目的运行产物 ---
+# 生成出来的歌和记录，不该进仓库
+songs/
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+!examples/**/*.mp3
+
+# 生成记录里的本地路径，按需保留
+song-*.json
+
+# --- 界面调试产物 ---
+# 网页服务的日志与临时下载
+*.log
+songs/*.tmp
+songs/*.part
+tmp/
+
+# --- ACE-Step 相关（如果便携包就放在仓库里，这只是兜底）---
+ACE-Step-1.5-portable/
+checkpoints/
+python_embeded/
+PortableGit/
+gradio_outputs/
+.cache/
+_triton_cache/
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- 本地配置 ---
+.env
+.env.local
+*.local.json

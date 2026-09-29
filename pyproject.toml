@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "song-for-someone"
+version = "0.2.0"
+description = "本地 AI 写歌工具箱 —— 给某个人的一首歌。跑在你自己机器上，不联网、不要额度、不限时长。"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Cheng Jungao" }]
+keywords = ["ai-music", "music-generation", "ace-step", "local", "windows", "triton"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Editors",
+]
+
+# 刻意不依赖任何第三方包：全部用标准库实现。
+# 这样 clone 下来就能跑，不用先建环境再装依赖。
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+sfs = "song_for_someone.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/chengjungao/song-for-someone"
+
+[tool.setuptools]
+packages = ["song_for_someone"]
+
+[tool.setuptools.package-data]
+song_for_someone = ["py.typed", "webapp/*"]
