@@ -51,7 +51,8 @@
 为了避免误会，把自己的部分列清楚：
 
 - `song_for_someone/` 下的全部模块，只用 Python 标准库
-  （含网页服务 `web.py`：基于标准库 `http.server`，无任何 Web 框架）
+  （含网页服务 `web.py`：基于标准库 `http.server`，无任何 Web 框架；
+  以及回环地址感知的 `net.py`：对 `127.0.0.1` 绕过代理环境变量）
 - `song_for_someone/webapp/` 里的网页界面（手写 HTML / CSS / JS，无前端框架、无构建）
 - `tools/patch_windows_triton.py` 补丁安装器
 - `docs/` 里的实测数据与排查记录

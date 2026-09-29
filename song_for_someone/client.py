@@ -31,6 +31,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import net
+
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_TIMEOUT = 60.0
 
@@ -209,7 +211,7 @@ class AceStepClient:
             url, data=data, headers={"Content-Type": "application/json"}
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with net.urlopen(req, timeout=self.timeout) as resp:
                 body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = ""
@@ -231,7 +233,7 @@ class AceStepClient:
     def _get(self, path: str) -> Dict[str, Any]:
         url = self.base_url + path
         try:
-            with urllib.request.urlopen(url, timeout=self.timeout) as resp:
+            with net.urlopen(url, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise ServiceUnreachable(
@@ -355,7 +357,7 @@ class AceStepClient:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            urllib.request.urlretrieve(full, str(out_path))
+            net.urlretrieve(full, str(out_path))
         except urllib.error.URLError as exc:
             raise AceStepError(f"下载失败 {full}：{exc}") from exc
         return out_path

@@ -31,7 +31,6 @@ import sys
 import threading
 import time
 import urllib.parse
-import urllib.request
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
@@ -40,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import __version__
+from . import net
 from .client import (
     DEFAULT_BASE_URL,
     AceStepClient,
@@ -1169,7 +1169,7 @@ def _open_browser_when_ready(url: str, timeout: float = 10.0) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(url + "health", timeout=0.5) as resp:
+                with net.urlopen(url + "health", timeout=0.5) as resp:
                     if resp.status == 200:
                         webbrowser.open(url)
                         return
