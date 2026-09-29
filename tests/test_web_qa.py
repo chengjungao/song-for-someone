@@ -82,6 +82,15 @@ WARN_LYRICS = "没有标签的一句歌词随便写下"
 NOISE = ("Traceback", "traceback", "URLError", "ConnectionRefused",
          "Exception", "HTTP 4", "HTTP 5")
 
+# QA 客户端只与本机回环服务通信（自己起的临时端口），必须**完全无视**环境
+# 变量里的代理配置，也不能复用 ``urllib.request`` 那个会被惰性缓存、可能被
+# 其它用例污染的全局 ``_opener``。真实症状：本模块在 discover 里跟在
+# ``test_net`` 之后跑时，HTTP 调用全被转发到一个已关闭的代理、连接被拒
+# （WinError 10061）。这里显式用一个「对谁都不过代理」的 opener，与产品
+# 自身 ``net.urlopen`` 对回环地址的处理保持一致。这一点很关键：装了代理
+# 工具并手动设过 ``http_proxy`` 的用户，正是本产品要重点兜住的人群。
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def _free_port() -> int:
     """要一个当前空闲的 TCP 端口（随即释放，供「不可达」用）。"""
@@ -201,7 +210,7 @@ class WebQABase(unittest.TestCase):
             head.setdefault("Content-Type", "application/json")
         req = urllib.request.Request(url, data=data, method=method, headers=head)
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with _NO_PROXY_OPENER.open(req, timeout=15) as resp:
                 return self._parse(resp)
         except urllib.error.HTTPError as exc:
             return self._parse(exc)
