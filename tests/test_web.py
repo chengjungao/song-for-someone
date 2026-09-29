@@ -243,6 +243,11 @@ class TestHealthAndMeta(WebTestCase):
             self.assertIn(key, data)
         self.assertTrue(data["out_dir_ok"])
 
+    def test_env_exposes_three_way_level(self):
+        # 三态角标靠这个字段，缺了它红色「不可用」永远出不来。
+        _status, payload, _headers = self.call("/api/env")
+        self.assertIn(payload["data"]["level"], ("ok", "warn", "bad"))
+
     def test_example_endpoint(self):
         _status, payload, _headers = self.call("/api/example?name=birthday")
         self.assertTrue(payload["ok"])
@@ -429,6 +434,33 @@ class TestGenerate(WebTestCase):
         )
         self.assertTrue(payload["data"]["out_name"].startswith("给妈妈-song-"))
         self.wait_done(payload["data"]["task_id"])
+
+    def test_summary_uses_friendly_keys(self):
+        # 完成页折叠区读的是 summary.tempo / summary.steps 等友好键名，
+        # 键名一旦写成契约原始名（如 bpm），界面上那一行会永远显示「模型自定」。
+        _status, payload, _headers = self.call(
+            "/api/generate", "POST",
+            {"prompt": "x", "lyrics": CLEAN_LYRICS, "duration": 120, "tempo": 99, "steps": 12},
+        )
+        data = self.wait_done(payload["data"]["task_id"])
+        summary = data["result"]["summary"]
+        self.assertEqual(summary["tempo"], 99)
+        self.assertEqual(summary["steps"], 12)
+        self.assertNotIn("bpm", summary)
+
+    def test_two_runs_same_minute_do_not_overwrite(self):
+        # 「再来一版」会在同一分钟内连出多首，绝不能静默覆盖前一首。
+        names = []
+        for _ in range(2):
+            _status, payload, _headers = self.call(
+                "/api/generate", "POST",
+                {"prompt": "x", "lyrics": CLEAN_LYRICS, "duration": 120, "out_prefix": "给爸爸"},
+            )
+            data = self.wait_done(payload["data"]["task_id"])
+            names.append(data["result"]["files"][0]["name"])
+        self.assertEqual(len(set(names)), 2, names)
+        for name in names:
+            self.assertTrue((self.songs_dir / name).is_file(), name)
 
 
 class TestMediaAndPaths(WebTestCase):

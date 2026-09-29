@@ -474,9 +474,10 @@ class GenerationWorker:
         ).strip()
 
         first = results[0] if results else None
+        # 注意：这里用「友好键名」（见 ARCH §3.3 的别名表），与前端 app.js 读取的键名一一对应。
         summary = {
             "duration": request.audio_duration,
-            "bpm": request.bpm,
+            "tempo": request.bpm,
             "tune": request.key_scale,
             "steps": request.inference_steps,
             "versions": request.batch_size,
@@ -775,13 +776,15 @@ class RequestHandler(BaseHTTPRequestHandler):
             reachable = False
 
         service_ok = reachable
+        healthy = False
         if reachable:
             service_detail = "已连上出歌程序"
             try:
                 client = _client_factory(_base_url, HEALTH_TIMEOUT)
-                if not client.health():
-                    service_detail = "出歌程序可能还在初始化"
+                healthy = bool(client.health())
             except Exception:  # noqa: BLE001
+                healthy = False
+            if not healthy:
                 service_detail = "出歌程序可能还在初始化"
         else:
             service_detail = "没连上出歌程序"
@@ -792,11 +795,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         except OSError:
             out_dir_ok = False
 
+        # 三态：上游不可达或目录不可写 → 不可用(bad)；连得上但还在初始化 → 需注意(warn)；否则正常(ok)。
+        if not reachable or not out_dir_ok:
+            level = "bad"
+        elif not healthy:
+            level = "warn"
+        else:
+            level = "ok"
+
         return {
             "python_ok": sys.version_info >= (3, 9),
             "service_ok": service_ok,
             "service_detail": service_detail,
             "out_dir_ok": out_dir_ok,
+            "level": level,
         }
 
     def _handle_doctor(self) -> None:
@@ -923,10 +935,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             duration = float(body.get("duration", 120))
         except (TypeError, ValueError):
-            self._error(422, "bad_duration", "时长请选 1 到 3 分钟之间。")
+            self._error(422, "bad_duration", "时长请选 10 秒到 10 分钟之间。")
             return
         if duration < 10 or duration > 600:
-            self._error(422, "bad_duration", "时长请选 1 到 3 分钟之间。")
+            self._error(422, "bad_duration", "时长请选 10 秒到 10 分钟之间。")
             return
 
         # --- 歌词门禁（与 CLI 语义一致）---
@@ -969,14 +981,15 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         out_prefix = str(body.get("out_prefix") or "")
         out_stem = default_out_name(out_prefix)
-        out_name = f"{out_stem}.{request.audio_format}"
         try:
             Path(SONGS_DIR).mkdir(parents=True, exist_ok=True)
-            out_path = Path(SONGS_DIR) / out_name
         except OSError as exc:
             store.release_generation()
             self._error(500, "internal", "存歌的目录建不出来。", str(exc))
             return
+        # 网页版会在同一分钟内连出多首（「再来一版」就是），必须避让已存在的文件，
+        # 否则第二首会静默覆盖第一首。只改 web 侧的取名，不动 default_out_name()。
+        out_name, out_path = _unique_output_path(Path(SONGS_DIR), out_stem, request.audio_format)
 
         estimated = estimate_seconds(request.audio_duration, request.batch_size, store.session_has_success)
         record = TaskRecord(
@@ -1089,6 +1102,29 @@ def _refill_from_request(request_raw: Any) -> Optional[dict]:
     for friendly, canonical in _ADVANCED_ALIASES.items():
         refill[friendly] = request_raw.get(canonical, defaults[friendly])
     return refill
+
+
+def _output_taken(out_dir: Path, name: str) -> bool:
+    """目录里是否已经有这个文件名（音频或它的同名复现记录都算占位）。"""
+    path = out_dir / name
+    return path.exists() or path.with_suffix(".json").exists()
+
+
+def _unique_output_path(out_dir: Path, stem: str, audio_format: str) -> tuple:
+    """给本次出歌挑一个不会撞车的文件名。
+
+    默认用 ``<stem>.<格式>``；若已存在则依次尝试 ``<stem>-2`` / ``-3`` …。
+    这样同一分钟内连出多首（含「再来一版」）不会静默覆盖前一首。
+    """
+    candidate = f"{stem}.{audio_format}"
+    if not _output_taken(out_dir, candidate):
+        return candidate, out_dir / candidate
+    index = 2
+    while True:
+        candidate = f"{stem}-{index}.{audio_format}"
+        if not _output_taken(out_dir, candidate):
+            return candidate, out_dir / candidate
+        index += 1
 
 
 # ------------------------------------------------------------------ 服务器

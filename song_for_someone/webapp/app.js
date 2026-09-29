@@ -190,10 +190,12 @@
     return api('/api/env').then(function (data) {
       var badge = $('env-badge');
       badge.classList.remove('badge-idle', 'badge-ok', 'badge-warn', 'badge-bad');
-      if (data.service_ok) {
+      // 用后端给的三态 level；老响应没有 level 时按 service_ok 兜底。
+      var level = data.level || (data.service_ok ? 'ok' : 'bad');
+      if (level === 'ok') {
         badge.classList.add('badge-ok');
         badge.textContent = '环境 正常';
-      } else if (data.service_detail) {
+      } else if (level === 'warn') {
         badge.classList.add('badge-warn');
         badge.textContent = '环境 需注意';
       } else {
@@ -613,14 +615,20 @@
   }
 
   // ---------------------------------------------------------------- 环境页
-  function showEnv(message) {
-    $('env-title').textContent = '出歌的程序还没打开';
-    $('env-lead').textContent = (message || '')
-      + ' 你电脑上负责「真正写歌」的那个程序没有在运行，所以现在点也没用。'
-      + '它是另外的一个软件，需要先单独打开它。';
+  function showEnv(message, title, lead) {
+    $('env-title').textContent = title || '出歌的程序还没打开';
+    $('env-lead').textContent = lead
+      || ((message || '')
+        + ' 你电脑上负责「真正写歌」的那个程序没有在运行，所以现在点也没用。'
+        + '它是另外的一个软件，需要先单独打开它。');
     $('doctor-panel').classList.add('hidden');
     show('screen-env');
     loadEnv();
+  }
+
+  function openEnvCheck() {
+    showEnv('', '环境自检', '下面是这台电脑的出歌环境情况。有问题的项目都写清了怎么办。');
+    loadDoctor();
   }
 
   function loadDoctor() {
@@ -735,7 +743,7 @@
     $('btn-songs').addEventListener('click', loadSongs);
     $('btn-back-form-2').addEventListener('click', function () { show('screen-form'); });
 
-    $('env-badge').addEventListener('click', function () { loadDoctor(); show('screen-env'); loadEnv(); });
+    $('env-badge').addEventListener('click', openEnvCheck);
 
     $('btn-env-from-progress').addEventListener('click', function () { showEnv(''); });
     $('btn-retry').addEventListener('click', function () {
@@ -751,7 +759,7 @@
     $('btn-copy-reproduce').addEventListener('click', copyReproduce);
 
     $('btn-error-retry').addEventListener('click', function () { show('screen-form'); submitGenerate(); });
-    $('btn-error-doctor').addEventListener('click', function () { loadDoctor(); show('screen-env'); });
+    $('btn-error-doctor').addEventListener('click', openEnvCheck);
     $('btn-error-back').addEventListener('click', function () { show('screen-form'); });
   }
 

@@ -323,6 +323,8 @@ classDiagram
 | 13 | `/media/<name>` | GET | — | 音频字节流（内联，支持 `Range`→206） | 供 `<audio>` 播放；`Content-Type` 由扩展名决定。**文件名做路径穿越校验**。 |
 | 14 | `/download/<name>` | GET | — | 音频字节流 + `Content-Disposition: attachment` | 下载按钮。文件名用 `filename*=UTF-8''...` 编码（中文名）。 |
 
+> **端点 #9 `/api/task/<task_id>/cancel`：0.2.0 版不实现**（主理人决策，见 §8 A3）。原因：释放单任务锁后用户可能立刻开新任务 → 两个生成并行 → 打爆 16GB 显存，与单任务锁的目的相矛盾；且实测一首歌仅约 15 秒，收益极低。因此本版**没有**该路由，界面上也没有「取消」按钮，改为一句提示「生成期间可以关掉页面，任务会继续跑完」。`TaskRecord.cancel_flag` 与内部异常 `_Cancelled` 作为占位保留（工作线程仍会检查该标志，为将来恢复预留），但当前没有任何入口会置位它。
+
 ### 3.3 请求 / 响应 JSON Schema
 
 **`POST /api/generate` 请求体**
