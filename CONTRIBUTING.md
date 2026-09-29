@@ -94,6 +94,21 @@ grep -rnE 'caption|inference_steps|batch_size|guidance_scale|task_type|key_scale
 （`127.0.0.0/8`、`localhost`、`::1`）强制绕过代理，**非回环地址照常走系统代理配置**。
 新增出站请求请用 `net.urlopen` / `net.urlretrieve`，不要直接用 `urllib.request`。
 
+### 3. `net.urlopen` 的非回环分支会复用进程级全局 opener
+
+非回环地址走的是 `urllib.request.urlopen` 原路径，而它会**惰性构建并缓存一个进程级
+全局 opener**（`urllib.request._opener`）—— 里面的 `ProxyHandler` 在**构建那一刻**
+就把代理环境变量**快照**了下来。
+
+**对本项目无影响**：我们只访问 `127.0.0.1`，走的是强制绕过代理的分支。
+
+但如果你要把它扩展成「访问远程模型服务」，请注意两点：
+
+- 进程运行期间再修改代理环境变量，**不会**对已缓存的 opener 生效；
+- 写测试时若临时改过 `http_proxy`，收尾**必须还原** `urllib.request._opener`，
+  否则会污染同进程内后续所有 HTTP 调用（症状是一大片莫名其妙的 `连接被拒`）。
+  `tests/test_net.py` 里有现成的 save / restore 写法可参考。
+
 ## 许可
 
 MIT，见 `LICENSE`。提交即表示你同意按此许可分发你的贡献。
