@@ -191,6 +191,15 @@ AssertionError: '界面已启动' not found in
 - `test_old_python_branch_is_simulated` 里的假 `sys` 改为只覆盖 `version_info`、
   其余属性透传真 `sys` —— 原来它等于假装「Python 3.8 没有 `sys.stdout`」，
   真实的 3.8 当然有。
+- `README.md` 里那个「已经带好模型的打包版」不再挂占位符：夸克网盘，分 4 个分卷
+  共 13.3 GiB（分卷数与总大小都对着实际文件核过）。链接带了 `?pwd=` 点开即进，
+  后面仍单独写一遍提取码 —— 有些浏览器会把 query 丢掉。
+- CI 失败时多一步 `Report failures`，把挂掉的测试名与那个格子的默认编码
+  （`locale.getpreferredencoding(False)` 与 `sys.stdout.encoding`）发成 annotation。
+  job 日志的正文要认证才读得到，公开仓库的 annotation 不用 —— 再遇到
+  「CI 红而本地绿」，不必等人上网页把日志抄下来。
+  `Run unit tests` 同时加了 `set -o pipefail`：它把输出 `tee` 了一份到文件，
+  不写 pipefail 的话退出码会被 `tee` 吃掉，测试挂了 CI 还报绿。
 - **`dependencies` 仍然为空。**
 
 ## 0.2.2
