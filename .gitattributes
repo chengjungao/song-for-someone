@@ -1,9 +1,16 @@
 # 按路径设置属性的更多信息见 gitattributes 文档：
 #   https://git-scm.com/docs/gitattributes
 #
+# --- 默认：文本文件一律 LF ---
+# 仓库里本就存 LF，这里写明确是为了不依赖 core.autocrlf —— 那是**每台机器
+# 各自的设置**，换个环境 clone 行为就不一样了，而仓库级规则到哪都一样。
+# 二进制文件不受影响（text=auto 会自动判定）。
+* text=auto eol=lf
+
 # --- Windows 批处理必须 CRLF ---
 # cmd.exe 的批处理解析器要求 CRLF 行尾。纯 LF 的 .bat 会「看着能跑」——
 # 不报错、前几行也正常，但主路径悄悄不执行（实测：被调用的脚本根本没被调到）。
 # 这里固定住，免得换个机器 clone 出来又退回 LF。
+# 注意：下面这两行必须排在 `*` 之后 —— 同一条属性后面的规则覆盖前面的。
 *.bat text eol=crlf
 *.cmd text eol=crlf

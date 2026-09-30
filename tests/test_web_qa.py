@@ -18,13 +18,14 @@ from __future__ import annotations
 import ast
 import io
 import json
+import re
 import socket
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
-import tomllib
 import unittest
 import urllib.error
 import urllib.parse
@@ -33,6 +34,16 @@ from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# tomllib 是 Python 3.11 才进标准库的。本项目承诺零依赖，不能引 tomli 这类
+# 回退包，所以 3.9 / 3.10 上退到下面 _array_literal_in() 那个窄解析器。
+#
+# 别小看这行 import：它一失败，**整个测试模块都收集不到**，本文件 61 条测试
+# 会静默消失（3.9 / 3.10 上只剩 279 条），CI 里表现为那两个格子直接红。
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9 / 3.10
+    tomllib = None
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -45,6 +56,110 @@ from song_for_someone.client import (  # noqa: E402
     TaskResult,
 )
 from song_for_someone.doctor import DoctorReport  # noqa: E402
+
+
+# ==================================== 跨版本工具（CI 要跑 3.9 ~ 3.12 四个版本）
+
+_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$", re.M)
+
+
+def _strip_comment(line: str) -> str:
+    """去掉 TOML 行末注释，引号里的 # 不算注释起点。"""
+    out: List[str] = []
+    quote: Optional[str] = None
+    for char in line:
+        if quote is not None:
+            out.append(char)
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+            out.append(char)
+        elif char == "#":
+            break
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _section_body(text: str, section: str) -> Optional[str]:
+    """返回 ``[section]`` 段的正文（到下一个表头为止，已去注释）。
+
+    没有这个段则返回 None —— 让「段不存在」与「段是空的」能分开。
+    """
+    marks = [
+        (m.group(1).strip(), m.start(), m.end())
+        for m in _SECTION_RE.finditer(text)
+    ]
+    for index, (name, _line_start, body_begin) in enumerate(marks):
+        if name != section:
+            continue
+        body_end = marks[index + 1][1] if index + 1 < len(marks) else len(text)
+        raw = text[body_begin:body_end]
+        return "\n".join(_strip_comment(line) for line in raw.splitlines())
+    return None
+
+
+def _array_literal(text: str, section: str, key: str) -> Optional[str]:
+    """取出 ``[section]`` 段里 ``key = [...]`` 的方括号内容，返回去掉空白的原文。
+
+    支持跨行数组。段或键不存在、括号没闭合，都返回 None。
+
+    「读不到」必须和「读到空数组」分开：前者返回 None，断言 ``== ""`` 会失败。
+    要是这里把两者混为一谈，窄解析器一旦失手就会把「没找到」当成「是空的」，
+    测试变成假绿 —— 那比不测还糟。调用处那句以 keywords 做的自证，就是
+    用来堵这个口子的。
+    """
+    body = _section_body(text, section)
+    if body is None:
+        return None
+    hit = re.search(r"^\s*" + re.escape(key) + r"\s*=\s*\[", body, re.M)
+    if hit is None:
+        return None
+    depth = 0
+    for offset in range(hit.end() - 1, len(body)):
+        char = body[offset]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return body[hit.end():offset].strip()
+    return None
+
+
+def _stdlib_names() -> set:
+    """标准库顶层模块名集合。
+
+    ``sys.stdlib_module_names`` 是 Python 3.10 才加的，3.9 上访问会
+    AttributeError。这里给 3.9 现补一份：标准库目录下的顶层 .py 与包名、
+    lib-dynload / DLLs 里的扩展模块名，再并上 C 内建模块名
+    （sys、time 这些不落盘，只能从 builtin_module_names 拿到）。
+
+    刻意不写成「3.9 就跳过这条断言」—— 那等于在旧版本上关掉零依赖红线，
+    而 3.9 正是 CI 里的一格。
+    """
+    names = set(sys.builtin_module_names)
+    listed = getattr(sys, "stdlib_module_names", None)
+    if listed is not None:
+        return names | set(listed)
+
+    stdlib = Path(sysconfig.get_paths()["stdlib"])
+    for folder in (stdlib, stdlib / "lib-dynload", stdlib.parent / "DLLs"):
+        if not folder.is_dir():
+            continue
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                names.add(entry.name)
+            elif folder.name in ("lib-dynload", "DLLs"):
+                # 形如 _socket.cpython-39-x86_64-linux-gnu.so
+                names.add(entry.name.split(".")[0])
+            elif entry.suffix in (".py", ".pyc"):
+                names.add(entry.stem)
+    return names
+
+
+_STDLIB_NAMES = _stdlib_names()
 
 # 一段「干净」歌词：无 error、无 warn（含 [Chorus]，长度够）。
 CLEAN = "\n".join([
@@ -648,9 +763,37 @@ class TestFilenameUniqueness(WebQABase):
 class TestCodeContracts(unittest.TestCase):
 
     def test_dependencies_are_empty(self):
-        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(data["project"]["dependencies"], [])
-        self.assertEqual(data["project"]["optional-dependencies"]["dev"], [])
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+        if tomllib is not None:
+            # 3.11+ 有标准库解析器，用权威结果，再拿字面判据交叉验一遍
+            data = tomllib.loads(text)
+            self.assertEqual(data["project"]["dependencies"], [])
+            self.assertEqual(data["project"]["optional-dependencies"]["dev"], [])
+        else:
+            # 3.9 / 3.10：先证明窄解析器真的在工作，再断言依赖为空。
+            # 少了这一步，解析器失手会返回 None，而成双的空数组断言照样通过。
+            # 分两级自证：段定位能用，数组取值也能用。
+            self.assertIsNotNone(
+                _section_body(text, "project"),
+                "连 [project] 段都没定位到，窄解析器失手了",
+            )
+            keywords = _array_literal(text, "project", "keywords")
+            self.assertTrue(
+                keywords and "ace-step" in keywords,
+                "窄解析器读不出同段里的 keywords，说明它失手了；"
+                "这种情况下「dependencies 是空的」不可信，直接判失败",
+            )
+
+        # 两条路都要过的字面判据：零依赖必须在这两个方括号里看得见
+        self.assertEqual(
+            _array_literal(text, "project", "dependencies"), "",
+            "project.dependencies 不是空数组（或读不到）—— 本项目承诺零第三方依赖",
+        )
+        self.assertEqual(
+            _array_literal(text, "project.optional-dependencies", "dev"), "",
+            "project.optional-dependencies.dev 不是空数组（或读不到）",
+        )
 
     def test_web_imports_no_cli_and_no_third_party(self):
         tree = ast.parse((ROOT / "song_for_someone" / "web.py").read_text(encoding="utf-8"))
@@ -664,7 +807,7 @@ class TestCodeContracts(unittest.TestCase):
                 absolutes.extend(a.name.split(".")[0] for a in node.names)
         self.assertNotIn("cli", relatives, "web.py 不得反向依赖 cli")
         self.assertNotIn("cli", absolutes)
-        third_party = [m for m in absolutes if m not in sys.stdlib_module_names]
+        third_party = [m for m in absolutes if m not in _STDLIB_NAMES]
         self.assertEqual(third_party, [], f"web.py 引入了第三方依赖：{third_party}")
 
     def test_common_imports_no_cli(self):
