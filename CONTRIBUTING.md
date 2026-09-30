@@ -35,6 +35,9 @@ python start.py          # 或 Windows 上双击 启动.bat
 - 让测试全绿（现有用例只允许增加，不允许删改）。
 - 新增网页相关的能力，请顺带给 `tests/test_web.py` 补一个用例 —— 用假客户端
   和临时目录，**不要**依赖真实显卡或真实 ACE-Step 服务。
+- 新增引擎相关的能力，补 `tests/test_engine.py` —— 用临时目录造假便携包、用假进程
+  和假服务。**测试里绝不许真去拉 ACE-Step 引擎**：一次冷启动要两三分钟，还会占满
+  显存。凡是跑 `start.py` 的用例，务必带上 `--no-engine`。
 - 提交信息用中文，说清「改了什么、为什么」。
 
 ## 界面文案的禁用词（含一处精确例外）
@@ -108,6 +111,20 @@ grep -rnE 'caption|inference_steps|batch_size|guidance_scale|task_type|key_scale
 - 写测试时若临时改过 `http_proxy`，收尾**必须还原** `urllib.request._opener`，
   否则会污染同进程内后续所有 HTTP 调用（症状是一大片莫名其妙的 `连接被拒`）。
   `tests/test_net.py` 里有现成的 save / restore 写法可参考。
+
+### 4. 引擎的生命周期跟着 `start.py`
+
+`start.py` 拉起的 ACE-Step 服务，会在 `finally` 里被主动停掉：窗口一关，界面和
+引擎一起停，约 14GB 显存随即释放。
+
+别改成「留着引擎让下次启动更快」——`start.py` 第 2 步时实测过：父进程退出后
+子进程本来就会被系统带走（引擎日志停在 `Uvicorn running` 之后，既没有报错也没有
+shutdown 记录），「让它自己常驻」是靠不住的。要做就做成确定的：要么主动停
+（现状），要么用 `DETACHED_PROCESS` 真正脱离，并给用户一个明确的停止入口 ——
+否则会留下一个占着 14GB 显存、用户不知道怎么关的后台进程。
+
+要让引擎长留着，现在有正路：便携包里的 `启动引擎.bat` 单独开着它，
+`start.py` 检测到已有引擎会直接复用，不会重复拉起。
 
 ## 许可
 

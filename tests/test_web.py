@@ -215,7 +215,7 @@ class TestHealthAndMeta(WebTestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["data"]["app"], "song-for-someone")
-        self.assertEqual(payload["data"]["version"], "0.2.0")
+        self.assertEqual(payload["data"]["version"], "0.2.1")
 
     def test_meta_has_ten_styles(self):
         _status, payload, _headers = self.call("/api/meta")

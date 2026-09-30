@@ -795,7 +795,10 @@ class TestStartScript(unittest.TestCase):
 
         proc = subprocess.Popen(
             [sys.executable, str(ROOT / "start.py"),
-             "--no-browser", "--port", str(busy)],
+             # --no-engine 是必须的：本用例只验证「端口顺延 + 真的监听起来」，
+             # 不传这个参数 start.py 会去真拉 ACE-Step 引擎（十几分钟、占满显存），
+             # 测试不该有这种副作用。引擎编排本身由 tests/test_engine.py 覆盖。
+             "--no-engine", "--no-browser", "--port", str(busy)],
             cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
         )

@@ -151,6 +151,45 @@ torch: 2.7.1+cu128 | CUDA: True
 | `vae` | 音频编解码 | 0.31 GB |
 | **合计** | | **9.40 GB** |
 
+### 便携包里有**两套** Python，别挑错
+
+解压完的便携包里有两处带 `python.exe`：
+
+| 路径 | 里面有什么 | 能不能用 |
+|---|---|---|
+| `<便携包>\python_embeded\python.exe` | Python 3.11.9 ＋ torch 2.7.1+cu128 ＋ diffusers 0.36.0 | **只能用这个** |
+| `<便携包>\.venv\Scripts\python.exe` | Python 3.12.0，**没有 torch** | 用不了，是空壳 |
+
+`.venv` 是上游的 `start_api_server.bat` 用 uv 建出来的。挑错那套的报错是
+`ModuleNotFoundError: No module named 'torch'`，比 triton 那个还难懂 ——
+因为「明明找到了 Python」。
+
+### 官方 `start_api_server.bat` 起不来
+
+它第 124 行判的是：
+
+```bat
+if exist "%~dp0python_embedded\python.exe"
+```
+
+`python_embedded` 比实际目录名**多了一个 `n`**，实际是 `python_embeded`
+（上游自己拼的，前后不一致）。这个判断**永远不成立**，脚本于是掉进 uv 分支，
+去用上面那个空壳 `.venv`。
+
+所以本次部署是**直接手敲命令**起的服务，绕开了那个 bat：
+
+```cmd
+cd /d D:\Works\ACE-Step-1.5-portable
+set TRITON_CACHE_DIR=D:\Works\ACE-Step-1.5-portable\_triton_cache
+python_embeded\python.exe -m acestep.api_server --host 127.0.0.1 --port 8001 --download-source modelscope
+```
+
+便携包根目录放了一份修正版 `启动引擎.bat`（新文件，不动上游原文件，
+免得被它的更新检查覆盖），想只起引擎不起界面时双击它。
+
+`sfs doctor` 与 `tools/patch_windows_triton.py` 判的也是 `python_embeded`，
+口径与上面这条命令一致。
+
 ---
 
 ## 四、其他几个坑
