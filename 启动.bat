@@ -1,23 +1,24 @@
 @echo off
-chcp 65001 >nul
+rem If the Chinese text below looks garbled, your console codepage
+rem is not 936. The commands are plain ASCII, so it still works.
 setlocal
 
 rem ============================================================
-rem  song-for-someone 一键启动（Windows）
-rem  双击本文件即可。不需要输入任何命令。
+rem  song-for-someone һ��������Windows��
+rem  ˫�����ļ����ɡ�����Ҫ�����κ����
 rem
-rem  它会把两件事一起做完：
-rem    1. 把音乐引擎（ACE-Step 本地服务）带起来
-rem    2. 打开网页界面
+rem  �����������һ�����꣺
+rem    1. ���������棨ACE-Step ���ط��񣩴�����
+rem    2. ����ҳ����
 rem
-rem  首次运行要下约 10GB 模型，可能等十几分钟；
-rem  之后每次冷启动约 1 分钟。
+rem  �״�����Ҫ��Լ 10GB ģ�ͣ����ܵ�ʮ�����ӣ�
+rem  ֮��ÿ��������Լ 1 ���ӡ�
 rem
-rem  关掉这个窗口，界面和音乐引擎会一起停（显存随之释放）。
-rem  不想每次等，可以先用便携包里的「启动引擎.bat」把引擎单独开着，
-rem  本脚本检测到引擎已在跑就会直接进界面。
+rem  �ص�������ڣ���������������һ��ͣ���Դ���֮�ͷţ���
+rem  ����ÿ�εȣ��������ñ�Я����ġ���������.bat�������浥�����ţ�
+rem  ���ű���⵽���������ܾͻ�ֱ�ӽ����档
 rem
-rem  想只开界面不起引擎，可以这样运行：
+rem  ��ֻ�����治�����棬�����������У�
 rem    start.py --no-engine
 rem ============================================================
 
@@ -29,13 +30,13 @@ goto done
 
 :no_python
 echo.
-echo  没有找到 Python。这个程序需要你先装一个 Python（免费）。
+echo  û���ҵ� Python�����������Ҫ����װһ�� Python����ѣ���
 echo.
-echo  怎么装：
-echo    1. 打开  https://www.python.org/downloads/
-echo    2. 点网页上那个黄色的 Download 按钮，下载后双击安装
-echo    3. 安装的第一屏，务必勾选最下面的 "Add Python to PATH"
-echo    4. 装好后把这个窗口关掉，再重新双击本文件
+echo  ��ôװ��
+echo    1. ��  https://www.python.org/downloads/
+echo    2. ����ҳ���Ǹ���ɫ�� Download ��ť�����غ�˫����װ
+echo    3. ��װ�ĵ�һ������ع�ѡ������� "Add Python to PATH"
+echo    4. װ�ú��������ڹص���������˫�����ļ�
 echo.
 goto done
 
