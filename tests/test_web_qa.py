@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 import re
 import socket
 import subprocess
@@ -882,6 +883,88 @@ class TestCliRegression(unittest.TestCase):
         self.assertEqual(self._run(["songs", "--out-dir", str(self.tmp)]).returncode, 0)
 
 
+# ============================================================ 控制台编码
+
+class TestConsoleEncoding(unittest.TestCase):
+    """中文提示语在输出被重定向时必须是 UTF-8 字节。
+
+    看着像小事，其实会在整片平台上翻车：Windows 上输出重定向到管道或文件时，
+    Python 用的是系统 ANSI 代码页 —— 中文系统 cp936、英文系统 cp1252。本项目的
+    提示语全是中文，英文系统上 cp1252 编不出汉字，直接 UnicodeEncodeError 把
+    程序打崩；中文系统上虽然不崩，但吐的是 GBK 字节，调用方按 UTF-8 解出来是
+    一串替换字符。
+
+    CI 跑测试本身就是重定向，所以这几条必须在**裸环境**（不带 PYTHONIOENCODING）
+    下也能过 —— 带上那个变量等于给被测对象戴了顶帽子，问题就被盖住了。
+    """
+
+    def _clean_env(self) -> Dict[str, str]:
+        """去掉会掩盖问题的编码变量，还原 CI 与普通调用方的处境。"""
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("PYTHONIOENCODING", "PYTHONUTF8")
+        }
+
+    def test_setup_console_makes_piped_output_utf8(self):
+        script = (
+            "from song_for_someone.common import setup_console;"
+            "setup_console();"
+            "print('界面已启动： http://127.0.0.1:8770/')"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script], cwd=str(ROOT),
+            capture_output=True, env=self._clean_env(),
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "带中文的提示语把子进程弄挂了："
+            + proc.stderr.decode("utf-8", "replace"),
+        )
+        # 这里刻意不指定 errors：解不出来正说明字节不是 UTF-8，要的就是这个信号。
+        # 也不指定 encoding，拿原始字节自己解 —— 免得被 subprocess 的默认行为遮住。
+        self.assertIn("界面已启动", proc.stdout.decode("utf-8"))
+
+    def test_cli_entry_output_is_utf8_when_piped(self):
+        """走真实入口，而不是只测那个函数 —— 入口忘了调就白搭。"""
+        proc = subprocess.run(
+            [sys.executable, "-m", "song_for_someone", "styles"],
+            cwd=str(ROOT), capture_output=True, env=self._clean_env(),
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("内置风格模板", proc.stdout.decode("utf-8"))
+
+    def test_every_entry_point_fixes_stdio(self):
+        """三个入口都得在打印中文之前固定输出编码。
+
+        start.py 那份是**刻意重复**的：它「Python 太旧」的分支要在包被 import
+        之前打印中文，那个时间点还用不上包里的实现。所以三个文件各自检查，
+        漏一个都会在英文 Windows 上崩。
+        """
+        expectations = {
+            "start.py": "_fix_stdio",
+            "song_for_someone/cli.py": "setup_console",
+            "song_for_someone/web.py": "setup_console",
+        }
+        for rel, callee in expectations.items():
+            tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
+            mains = [
+                node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "main"
+            ]
+            self.assertTrue(mains, f"{rel} 里没有 main()")
+            called = {
+                node.func.id
+                for node in ast.walk(mains[0])
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            self.assertIn(
+                callee, called,
+                f"{rel} 的 main() 没有调用 {callee}()：输出被重定向时，"
+                f"中文提示语会在英文 Windows 上抛 UnicodeEncodeError",
+            )
+
+
 # ============================================================ 启动脚本
 
 class TestStartScript(unittest.TestCase):
@@ -896,8 +979,18 @@ class TestStartScript(unittest.TestCase):
             releaselevel = "final"
             serial = 0
 
+        orig_sys = sys
+
         class FakeSys:
             version_info = FakeVersion((3, 8, 0, "final", 0))
+
+            def __getattr__(self, name):
+                # 只让 version_info 看起来是 3.8，别的一律透传真 sys。
+                # 早先这里只挂了一个 version_info，等于假装「Python 3.8 没有
+                # sys.stdout」—— 真实的 3.8 当然有。那样一旦被测代码在版本
+                # 检查前碰了 sys 的其它属性，这个假对象就会以 AttributeError
+                # 把测试弄红，而那是**假**的失败信号。
+                return getattr(orig_sys, name)
 
         orig = start_mod.sys
         orig_pause = start_mod._pause

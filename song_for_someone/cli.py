@@ -33,7 +33,7 @@ from .client import (
     ServiceUnreachable,
     first_meta,
 )
-from .common import default_out_name, human_duration, write_sidecar
+from .common import default_out_name, human_duration, setup_console, write_sidecar
 from .doctor import format_report as format_doctor_report, run_doctor
 from .lyrics import analyze as analyze_lyrics
 from .lyrics import format_report as format_lyrics_report
@@ -44,20 +44,6 @@ DEFAULT_TIMEOUT = 1800.0
 
 
 # ------------------------------------------------------------------ 工具
-
-
-def setup_console() -> None:
-    """让 Windows 控制台能正确显示中文。
-
-    Windows 的 cmd / PowerShell 默认是 GBK 代码页，直接 print 中文会乱码，
-    或者抛 UnicodeEncodeError 把程序打断。这里把标准输出切成 UTF-8，
-    并且把无法编码的字符降级替换掉，保证不会因为一个字符崩掉整次生成。
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
 
 
 def read_lyrics(args: argparse.Namespace) -> str:

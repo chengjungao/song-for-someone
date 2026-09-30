@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
@@ -41,6 +42,36 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 # 连续空白（含换行、制表符）。
 _WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def setup_console() -> None:
+    """把标准输出的编码固定成 UTF-8。
+
+    为什么需要它：Windows 上输出**重定向**到管道或文件时，Python 用的是系统
+    ANSI 代码页 —— 中文系统 cp936、英文系统 cp1252，而不是 UTF-8。本项目的
+    提示语全是中文，在英文系统上 cp1252 编不出汉字，会直接抛
+    ``UnicodeEncodeError`` 把程序打崩；在中文系统上则输出 GBK 字节，调用方
+    （脚本、CI、别的程序）按 UTF-8 解出来就是一串 ``\\ufffd``。
+
+    连到控制台时它本来就是 UTF-8（Python 在 Windows 上走宽字符 API），再设
+    一次没有影响，所以这里不必区分是不是 tty。
+
+    ``errors="replace"`` 是兜底：万一还有个别字编不出来，降级成替换字符，
+    而不是让整个程序因为一行提示语崩掉。
+    """
+    # 用 pythonw 之类没有控制台的方式启动时，stdout / stderr 本身就是 None；
+    # 拿不到就跳过，别为了显示层的事把启动打断。
+    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # stdout 被换成不支持重设编码的对象时忽略：显示难看总比崩了强。
+            pass
 
 
 def human_duration(seconds: float) -> str:

@@ -48,7 +48,7 @@ from .client import (
     ServiceUnreachable,
     first_meta,
 )
-from .common import DEFAULT_OUT_DIR, default_out_name, human_duration, write_sidecar
+from .common import DEFAULT_OUT_DIR, default_out_name, human_duration, setup_console, write_sidecar
 from .doctor import LEVEL_LABELS, DoctorReport, run_doctor
 from .lyrics import MAX_LYRICS_CHARS, LyricsReport, analyze as analyze_lyrics
 from .styles import StylePreset, get_preset, list_presets
@@ -1294,6 +1294,10 @@ def serve(host: str = HOST, base_port: int = DEFAULT_PORT,
 def main(argv: Optional[List[str]] = None) -> int:
     """命令行入口：``python -m song_for_someone.web`` 或 ``python start.py``。"""
     global SONGS_DIR, _base_url
+
+    # 启动横幅是中文，输出被重定向时得先固定成 UTF-8，否则英文 Windows 上
+    # cp1252 编不出汉字会直接崩（详见 common.setup_console）。
+    setup_console()
 
     parser = argparse.ArgumentParser(
         prog="song-for-someone-web",

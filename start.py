@@ -26,6 +26,34 @@ MIN_VERSION = (3, 9)
 RULE = "=" * 62
 
 
+def _fix_stdio() -> None:
+    """把标准输出的编码固定成 UTF-8。
+
+    与 ``song_for_someone.common.setup_console`` 是同一件事，这里**刻意重复**
+    一份：下面「Python 太旧」那条分支要在这之后、在包被 import 之前就打印
+    中文，那个时间点还用不上包里那份。
+
+    为什么必须先修：Windows 上输出**重定向**到管道或文件时，Python 用的是系统
+    ANSI 代码页 —— 中文系统 cp936、英文系统 cp1252。本脚本的提示语全是中文，
+    在英文系统上 cp1252 编不出汉字，会直接抛 ``UnicodeEncodeError``；在中文
+    系统上则输出 GBK 字节，调用方按 UTF-8 解出来是一串 ``\\ufffd``。
+    连到控制台时它本来就是 UTF-8（Python 在 Windows 上走宽字符 API），
+    再设一次没有影响。
+    """
+    # 用 pythonw 之类没有控制台的方式启动时，stdout / stderr 本身就是 None；
+    # 拿不到就跳过，别为了显示层的事把启动打断。
+    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def _ensure_package_importable() -> None:
     """让脚本无论在哪个工作目录被双击，都能 import 到本项目的包。"""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -132,6 +160,9 @@ def _stop_engine(handle: Optional[object]) -> None:
 
 def main() -> int:
     """校验 Python 版本，备好引擎，拉起网页服务。"""
+    # 必须最先做：下面「Python 太旧」那条分支也要打印中文。
+    _fix_stdio()
+
     if sys.version_info < MIN_VERSION:
         current = f"{sys.version_info.major}.{sys.version_info.minor}"
         print("=" * 60)
