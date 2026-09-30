@@ -50,6 +50,22 @@ sfs make --style folk --lyrics-file lyrics.txt -o 给妈妈的歌.mp3
 
 ---
 
+## 听听它做出来什么样
+
+仓库里放了一首真跑出来的成品，clone 下来直接就能听：
+
+- **[`examples/audio/national-day-2026.mp3`](examples/audio/national-day-2026.mp3)**
+  2 分 00 秒 ｜ 77 BPM ｜ B♭ 大调 ｜ 1.8 MB ｜ 出歌用时 36.2 秒（RTX 4080）
+- 词在 [`examples/lyrics/national-day-2026.txt`](examples/lyrics/national-day-2026.txt)，
+  2026 年国庆那天写的。
+
+想自己跑一遍同一套参数，用结果里给你的 `reproduce` 命令行。
+
+> 那条命令给的是**参数**，不是同一首歌的保证：这次跑的时候随机种子是开的，
+> 同样的参数再跑一遍，旋律和这一首不一样。要复现确切波形得先把种子固定住。
+
+---
+
 ## 先说门槛
 
 这个项目对读者不友好，我必须提前说清楚：
