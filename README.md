@@ -392,9 +392,8 @@ song-for-someone/
 ├── examples/                可直接跑的示例
 ├── docs/                    部署实录、实测数据、常见问题、图形界面说明
 │   └── design/              PRD 与架构设计文档
-├── tests/                   276 个单元测试，零依赖
+├── tests/                   344 个单元测试，零依赖
 ├── screenshots/             界面截图（公众号文章用）
-├── .github/workflows/       CI：跑测试
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── songs/                   出歌的输出目录（默认，不进版本库）

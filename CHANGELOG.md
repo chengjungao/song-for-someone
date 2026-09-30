@@ -166,6 +166,40 @@ AssertionError: '界面已启动' not found in
 盯）。同样配了变异测试：把 `setup_console` 的动作挖空、把三个入口的调用逐个删掉，
 对应测试都必须变红 —— 四个变异全被抓到。
 
+### 测试进程没做入口做的准备，于是 CI 上 Windows 全红
+
+上一节修完输出编码，ubuntu 的四个格子绿了，windows 的四个**还是红的**，而本地
+裸跑五个版本全绿。差别在哪，得先拿到失败信息 —— 可 job 日志的正文要认证才读得到，
+手边既没有 token 也没装 `gh`。于是让 workflow 在失败时把挂掉的测试名发成
+annotation（公开仓库的 annotation 不用 token）。
+
+拿到之后一眼就明白了。343 条测试**全都在跑**，说明前面两节讲的两个问题确实修掉了；
+挂在 `TestStartScriptHandoff` 的三条，全是 ERROR，没有一条是断言失败：
+
+```text
+ERROR: test_adopted_is_not_ours (tests.test_engine.TestStartScriptHandoff...)
+ERROR: test_already_up_is_not_ours (...)
+ERROR: test_failed_is_not_ours (...)
+stdout encoding cp1252
+```
+
+三条都调 `start.py` 的 `_prepare_engine()`，它第一句是 `_say("[1/2] 音乐引擎")`。
+cp1252 编不出「音乐引擎」，`print` 抛 `UnicodeEncodeError`。
+
+**产品本身没问题。** 三个入口的 `main()` 第一步都把输出固定成了 UTF-8（上一节修的）。
+出问题的是测试：它直接调内部函数，绕过了入口那一步，等于在一个真实运行时不会出现
+的环境里跑。所以在 `tests/__init__.py` 的模块级补上同一件事。
+
+**为什么只挂三条，这最迷惑人。** 崩的顺序取决于字母序：`test_main_*` 那几条会调
+`main()`，而 `main()` 一跑，stdout 就被**永久**改成 UTF-8，排在它们后面的测试全都
+跟着沾光。于是「哪几条红」甚至取决于测试叫什么名字。本机是 UTF-8，这些一概看不见。
+
+所以那条修法还配了一把锁：AST 检查 `tests/__init__.py` 有没有在模块级调
+`setup_console()`。运行时断言在本机永远是绿的（本机就是 UTF-8），查源码才抓得住。
+
+六个变异方向全符合预期：注释掉那行，cp1252 下交接测试与锁测试都变红；加注释、
+加无关语句，两边都仍然绿。
+
 ### 接口
 
 | 方法 | 路径 | 说明 |
@@ -194,12 +228,17 @@ AssertionError: '界面已启动' not found in
 - `README.md` 里那个「已经带好模型的打包版」不再挂占位符：夸克网盘，分 4 个分卷
   共 13.3 GiB（分卷数与总大小都对着实际文件核过）。链接带了 `?pwd=` 点开即进，
   后面仍单独写一遍提取码 —— 有些浏览器会把 query 丢掉。
-- CI 失败时多一步 `Report failures`，把挂掉的测试名与那个格子的默认编码
-  （`locale.getpreferredencoding(False)` 与 `sys.stdout.encoding`）发成 annotation。
-  job 日志的正文要认证才读得到，公开仓库的 annotation 不用 —— 再遇到
-  「CI 红而本地绿」，不必等人上网页把日志抄下来。
-  `Run unit tests` 同时加了 `set -o pipefail`：它把输出 `tee` 了一份到文件，
-  不写 pipefail 的话退出码会被 `tee` 吃掉，测试挂了 CI 还报绿。
+- **CI 移除了。** `.github/workflows/tests.yml` 整份删掉，本项目不再跑 GitHub
+  Actions。它是推上 GitHub 之后建起来的，帮着把上面三个问题挖了出来；修完之后
+  本地一条命令（`python -m unittest discover -s tests -t .`，344 条，零依赖）
+  就够用，不必再养一个 CI。
+  它生前做的最后一件有用的事，是失败时把挂掉的测试名与那个格子的默认编码发成
+  annotation —— job 日志的正文要认证才读得到，公开仓库的 annotation 不用，
+  Windows 全红的根因就是靠这个拿到的。`Run unit tests` 里那句 `set -o pipefail`
+  也一并删了：它本来是为了让 `tee` 别把退出码吃掉。
+
+  `tests/__init__.py` 里那行输出编码的准备**保留** —— 它跟 CI 无关，在英文或
+  中文 Windows 上直接跑测试一样需要。
 - **`dependencies` 仍然为空。**
 
 ## 0.2.2
