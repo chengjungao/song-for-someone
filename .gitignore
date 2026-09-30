@@ -66,3 +66,5 @@ desktop.ini
 .env
 .env.local
 *.local.json
+# 网页界面里手填过的便携包位置（每台机器不一样，不该进仓库）
+.engine-root

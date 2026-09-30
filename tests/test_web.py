@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import song_for_someone.web as web  # noqa: E402
+from song_for_someone import __version__  # noqa: E402
 from song_for_someone.client import (  # noqa: E402
     AceStepError,
     GenerateRequest,
@@ -74,6 +75,66 @@ def _fake_doctor() -> DoctorReport:
     report.add("python", "Python 版本", "ok", "3.13 测试环境")
     report.add("service", "ACE-Step 服务", "fail", "端口不通", fix="先启动 start_api_server.bat")
     return report
+
+
+# 假控制器默认给的那份状态：没服务、没便携包、没有我们起的引擎。
+FAKE_PACKAGE = {
+    "root": None,
+    "source": None,
+    "python_exe": None,
+    "has_torch": False,
+    "usable": False,
+    "manual_reason": "",
+    "note": "没找到 ACE-Step 便携包。",
+}
+
+
+class _FakeController:
+    """冒充 ``engine.EngineController``。
+
+    网页测试绝不能真去探测本机便携包、更绝不能真起引擎 —— 起一次要占 14GB
+    显存、还要等一两分钟。所以这里只实现 Web 用到的那几个方法。
+    """
+
+    def __init__(self, *, start_result=None, stop_result=None, **snapshot_overrides):
+        self.snapshot_calls = []
+        self.start_calls = []
+        self.stop_calls = 0
+        self.start_result = start_result or {"ok": True, "message": "正在启动出歌程序…"}
+        self.stop_result = stop_result or {"ok": True, "message": "出歌程序已停止，显存已释放。"}
+        self.data = {
+            "base_url": "http://127.0.0.1:8001",
+            "service": "off",
+            "service_detail": "没连上出歌程序",
+            "starting": False,
+            "can_stop": False,
+            "stop_hint": "",
+            "job": {"status": "idle", "lines": [], "message": "", "elapsed": 0.0},
+            "package": dict(FAKE_PACKAGE),
+        }
+        self.data.update(snapshot_overrides)
+
+    def snapshot(self, refresh=False):
+        self.snapshot_calls.append(refresh)
+        return json.loads(json.dumps(self.data))   # 深拷一份，免得被改到
+
+    def start(self, root=None, log=None):
+        self.start_calls.append(root)
+        return dict(self.start_result)
+
+    def stop(self):
+        self.stop_calls += 1
+        result = dict(self.stop_result)
+        # 真实的 ``EngineController.stop()`` 会把这句话写进 job.message，
+        # 界面上看到的就是它 —— 这里照着做，否则测的是假对象自己的硬编码。
+        message = result.get("message")
+        if message:
+            self.data["job"]["message"] = message
+            self.data["job"]["lines"].append(message)
+        self.data["can_stop"] = False
+        if result.get("ok"):
+            self.data["service"] = "off"
+        return result
 
 
 class _FakeClient:
@@ -129,6 +190,8 @@ class WebTestCase(unittest.TestCase):
         cls._orig_songs_dir = web.SONGS_DIR
         cls._orig_factory = web._client_factory
         cls._orig_doctor = web._doctor_runner
+        cls._orig_controller = web._engine_controller
+        cls._orig_injected = web._injected_engine_handle
 
         web.SONGS_DIR = cls.songs_dir
         web._client_factory = lambda base, timeout: _FakeClient(base, timeout)
@@ -148,6 +211,8 @@ class WebTestCase(unittest.TestCase):
         web.SONGS_DIR = cls._orig_songs_dir
         web._client_factory = cls._orig_factory
         web._doctor_runner = cls._orig_doctor
+        web._engine_controller = cls._orig_controller
+        web._injected_engine_handle = cls._orig_injected
         cls._tmp.cleanup()
 
     def setUp(self):
@@ -155,6 +220,10 @@ class WebTestCase(unittest.TestCase):
         web.SONGS_DIR = self.songs_dir
         web._client_factory = lambda base, timeout: _FakeClient(base, timeout)
         web._doctor_runner = _fake_doctor
+        web._injected_engine_handle = None
+        # 每条用例换一个新的假控制器：引擎相关接口一个都不许碰到真环境
+        self.controller = _FakeController()
+        web._engine_controller = self.controller
         # 清掉上一次用例留下的产物
         for item in self.songs_dir.iterdir():
             if item.is_file():
@@ -215,7 +284,8 @@ class TestHealthAndMeta(WebTestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["data"]["app"], "song-for-someone")
-        self.assertEqual(payload["data"]["version"], "0.2.2")
+        # 对照包自己的版本号，而不是写死一个字面量 —— 否则每次发版都要来改测试
+        self.assertEqual(payload["data"]["version"], __version__)
 
     def test_meta_has_ten_styles(self):
         _status, payload, _headers = self.call("/api/meta")
@@ -461,6 +531,153 @@ class TestGenerate(WebTestCase):
         self.assertEqual(len(set(names)), 2, names)
         for name in names:
             self.assertTrue((self.songs_dir / name).is_file(), name)
+
+
+class TestEngineEndpoints(WebTestCase):
+    """环境页那三个接口：看状态、起引擎、停引擎。"""
+
+    def test_get_engine_returns_snapshot(self):
+        status, payload, _headers = self.call("/api/engine")
+        self.assertEqual(status, 200)
+        data = payload["data"]
+        self.assertEqual(data["service"], "off")
+        self.assertFalse(data["can_stop"])
+        self.assertEqual(data["package"]["note"], FAKE_PACKAGE["note"])
+
+    def test_refresh_query_forces_a_rediscovery(self):
+        self.call("/api/engine")
+        self.assertEqual(self.controller.snapshot_calls, [False])
+        self.call("/api/engine?refresh=1")
+        self.assertEqual(self.controller.snapshot_calls, [False, True])
+
+    def test_refresh_zero_is_not_a_refresh(self):
+        self.call("/api/engine?refresh=0")
+        self.assertEqual(self.controller.snapshot_calls, [False])
+
+    def test_start_passes_the_root_and_returns_202(self):
+        status, payload, _headers = self.call(
+            "/api/engine/start",
+            method="POST",
+            body={"root": "D:\\Works\\ACE-Step-1.5-portable"},
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            self.controller.start_calls, ["D:\\Works\\ACE-Step-1.5-portable"]
+        )
+
+    def test_start_without_root_passes_none(self):
+        self.call("/api/engine/start", method="POST", body={})
+        self.assertEqual(self.controller.start_calls, [None])
+
+    def test_start_reports_the_new_state_so_ui_can_poll(self):
+        web._engine_controller = _FakeController(starting=True)
+        status, payload, _headers = self.call("/api/engine/start", method="POST", body={})
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["data"]["starting"])
+
+    def test_bad_root_returns_422_with_the_original_reason(self):
+        """多行的具体原因要原样带出来 —— 界面靠它告诉用户改哪儿。"""
+        reason = "没有这个文件夹：D:\\nope\n路径建议从资源管理器的地址栏复制。"
+        web._engine_controller = _FakeController(
+            start_result={"ok": False, "reason": "bad-root", "message": reason}
+        )
+        status, payload, _headers = self.call(
+            "/api/engine/start", method="POST", body={"root": "D:\\nope"}
+        )
+        self.assertEqual(status, 422)
+        self.assertEqual(payload["error"]["code"], "bad_engine_root")
+        self.assertEqual(payload["error"]["message"], reason)
+
+    def test_start_while_starting_returns_409(self):
+        web._engine_controller = _FakeController(
+            start_result={
+                "ok": False,
+                "reason": "busy",
+                "message": "已经在启动中了，这就不用重复点了。",
+            }
+        )
+        status, payload, _headers = self.call("/api/engine/start", method="POST", body={})
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["error"]["code"], "engine_busy")
+
+    def test_stop_returns_snapshot(self):
+        status, payload, _headers = self.call("/api/engine/stop", method="POST", body={})
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(self.controller.stop_calls, 1)
+        self.assertEqual(payload["data"]["service"], "off")
+
+    def test_stop_not_ours_returns_409(self):
+        web._engine_controller = _FakeController(
+            stop_result={
+                "ok": False,
+                "reason": "not-ours",
+                "message": "这个出歌程序不是从这个界面起的，这里停不了。",
+            }
+        )
+        status, payload, _headers = self.call("/api/engine/stop", method="POST", body={})
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["error"]["code"], "engine_not_ours")
+        self.assertIn("不是从这个界面起的", payload["error"]["message"])
+
+    def test_stop_failure_still_answers_200(self):
+        """进程没停掉不算接口错误：状态里带着说明，界面照常显示。"""
+        web._engine_controller = _FakeController(
+            stop_result={"ok": False, "message": "没能正常停掉。可以在任务管理器里结束那个 python 进程。"},
+        )
+        status, payload, _headers = self.call("/api/engine/stop", method="POST", body={})
+        self.assertEqual(status, 200)
+        self.assertIn("任务管理器", payload["data"]["job"]["message"])
+
+    def test_start_endpoint_rejects_get(self):
+        status, _payload, _headers = self.call("/api/engine/start")
+        self.assertEqual(status, 404)
+
+
+class _RecordingController:
+    """只记一句 adopt 的假控制器，用来测句柄注入。"""
+
+    def __init__(self):
+        self.adopted = []
+
+    def adopt(self, handle):
+        self.adopted.append(handle)
+
+
+class TestEngineHandleInjection(unittest.TestCase):
+    """``start.py`` 把引擎句柄交进来这一步。
+
+    少了它，环境页那个「停止出歌程序」手里只有 ``None`` —— 界面既不知道该停
+    谁，也不该去猜（按端口猜会误杀别人的进程）。
+    """
+
+    def setUp(self):
+        self._orig_controller = web._engine_controller
+        self._orig_injected = web._injected_engine_handle
+        web._engine_controller = None
+        web._injected_engine_handle = None
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        web._engine_controller = self._orig_controller
+        web._injected_engine_handle = self._orig_injected
+
+    def test_handle_comes_in_before_the_controller_is_built(self):
+        handle = object()
+        web.set_engine_handle(handle)
+        controller = web.get_engine_controller()
+        self.assertIs(controller.own_handle(), handle)
+
+    def test_handle_comes_in_after_the_controller_already_exists(self):
+        recorder = _RecordingController()
+        web._engine_controller = recorder
+        web.set_engine_handle("handle")
+        self.assertEqual(recorder.adopted, ["handle"])
+
+    def test_no_handle_means_the_ui_cannot_stop(self):
+        web.set_engine_handle(None)
+        self.assertIsNone(web.get_engine_controller().own_handle())
 
 
 class TestMediaAndPaths(WebTestCase):

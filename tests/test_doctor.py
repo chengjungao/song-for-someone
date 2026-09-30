@@ -426,5 +426,156 @@ class TestRunDoctorWiring(unittest.TestCase):
             self.assertEqual(check.level, doctor.LEVEL_OK)
 
 
+# ---------------------------------------------------------------- 记住的位置
+
+
+class RememberedRootCase(unittest.TestCase):
+    """把「记住的便携包位置」换到临时目录，别污染仓库根。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store = Path(self._tmp.name) / ".engine-root"
+        patcher = mock.patch.object(
+            doctor, "_remembered_root_file", return_value=self.store
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class TestRememberedRoot(RememberedRootCase):
+    """界面上手填过的位置：记一行文本，下次自动排在候选前面。"""
+
+    def test_none_before_anything_saved(self):
+        self.assertIsNone(doctor.remembered_root())
+
+    def test_save_then_read_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            saved = doctor.remember_root(root)
+            self.assertEqual(saved, root.resolve())
+            self.assertEqual(doctor.remembered_root(), root.resolve())
+
+    def test_blank_file_is_ignored(self):
+        self.store.write_text("\n   \n", encoding="utf-8")
+        self.assertIsNone(doctor.remembered_root())
+
+    def test_first_non_empty_line_wins(self):
+        self.store.write_text("\n  \nD:\\Works\\ACE-Step-1.5-portable\n", encoding="utf-8")
+        self.assertEqual(doctor.remembered_root(), Path("D:\\Works\\ACE-Step-1.5-portable"))
+
+    def test_forget_removes_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doctor.remember_root(make_portable(tmp))
+            doctor.forget_root()
+            self.assertIsNone(doctor.remembered_root())
+
+    def test_forget_missing_file_is_fine(self):
+        doctor.forget_root()  # 不该抛
+
+    def test_write_failure_is_not_fatal(self):
+        """写不进去（目录不存在、只读）不该让启动失败 —— 记不住就记不住。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            missing = Path(tmp) / "no-such-dir" / ".engine-root"
+            with mock.patch.object(doctor, "_remembered_root_file", return_value=missing):
+                self.assertIsNone(doctor.remember_root(root))
+
+    def test_ranks_right_after_explicit_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            doctor.remember_root(root)
+            roots = doctor.candidate_roots("/explicit/ACE")
+            self.assertEqual(roots[0], Path("/explicit/ACE"))
+            self.assertEqual(roots[1], root.resolve())
+
+    def test_remembered_dir_that_vanished_is_skipped_by_lookup(self):
+        """记下的目录被删/改名了，要能自动跳过，不能把启动卡死。"""
+        import shutil
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(Path(tmp) / "gone")
+            doctor.remember_root(root)
+            shutil.rmtree(root)
+            with only_candidates():
+                self.assertIsNone(doctor.find_package_root())
+
+
+# ---------------------------------------------------------------- 手填路径
+
+
+class TestValidatePackageRoot(unittest.TestCase):
+    """用户在界面上手填路径时的校验：报错必须说清「哪儿不对」。"""
+
+    def test_accepts_portable_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            found, reason = doctor.validate_package_root(str(root))
+            self.assertEqual(found, root)
+            self.assertEqual(reason, "")
+
+    def test_tolerates_quotes_and_spaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            for messy in (f'  "{root}"  ', f"'{root}'", f"  {root}  "):
+                found, _reason = doctor.validate_package_root(messy)
+                self.assertEqual(found, root, f"没容错：{messy!r}")
+
+    def test_points_at_parent_directory(self):
+        """填成上级目录是常见误填 —— 往下找一层就好，别让用户重来。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(Path(tmp) / "ACE-Step-1.5-portable")
+            found, reason = doctor.validate_package_root(tmp)
+            self.assertEqual(found, root)
+            self.assertEqual(reason, "")
+
+    def test_ambiguous_parent_asks_which_one(self):
+        """上级目录里躺着两个便携包 —— 不猜，把名字列出来让用户选。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            make_portable(Path(tmp) / "ACE-Step-1.5-portable")
+            make_portable(Path(tmp) / "ACE-Step-1.6-portable")
+            found, reason = doctor.validate_package_root(tmp)
+            self.assertIsNone(found)
+            self.assertIn("好几个", reason)
+            self.assertIn("ACE-Step-1.5-portable", reason)
+
+    def test_empty_input(self):
+        for empty in (None, "", "   ", '""'):
+            found, reason = doctor.validate_package_root(empty)
+            self.assertIsNone(found)
+            self.assertTrue(reason)
+
+    def test_missing_directory_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "其实没有这个目录"
+            found, reason = doctor.validate_package_root(str(missing))
+            self.assertIsNone(found)
+            self.assertIn("没有这个文件夹", reason)
+
+    def test_plain_folder_says_no_portable_there(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "随便一个文件.txt").write_text("hi", encoding="utf-8")
+            found, reason = doctor.validate_package_root(tmp)
+            self.assertIsNone(found)
+            self.assertIn("里没找到便携包", reason)
+
+    def test_python_without_torch_names_the_reason(self):
+        """找到 Python 却没 torch —— 必须点名说清，否则报错会变成难懂的 ModuleNotFoundError。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            make_portable(tmp, with_torch=False)
+            found, reason = doctor.validate_package_root(tmp)
+            self.assertIsNone(found)
+            self.assertIn("没装 torch", reason)
+            self.assertIn("python_embeded", reason)
+
+    def test_missing_python_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "acestep").mkdir()
+            found, reason = doctor.validate_package_root(str(root))
+            self.assertIsNone(found)
+            self.assertIn("没找到 Python", reason)
+
+
 if __name__ == "__main__":
     unittest.main()

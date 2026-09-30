@@ -176,6 +176,13 @@ button.ghost:hover { border-color: var(--brand); color: var(--brand); }
   background: #fdf7ee; color: #8a5a13; font-size: 14px; border: 1px solid #f0e2c8;
 }
 
+/* 中性提示（和上面那个提醒不同：这里说的是「已经做了什么」，不是「你有什么问题」） */
+.form-note {
+  margin-top: 14px; padding: 10px 14px; border-radius: 10px;
+  background: #f2f6fb; color: #3c5a7d; font-size: 14px; border: 1px solid #dae5f1;
+  white-space: pre-wrap;
+}
+
 /* ---------------------------------------------------------- 进度 */
 .progress-wrap { text-align: center; padding: 30px 10px 10px; }
 .progress-wrap h2 { font-size: 22px; margin: 0 0 26px; }
@@ -240,6 +247,30 @@ audio { width: 100%; margin: 6px 0; }
 .lead { font-size: 15.5px; }
 .steps-list { padding-left: 22px; line-height: 1.9; }
 .steps-list code { background: #f2f4f8; padding: 1px 6px; border-radius: 5px; font-size: 14px; }
+
+/* 引擎卡片：状态 / 起停 / 便携包位置 / 启动日志 */
+.engine-card {
+  margin: 18px 0 4px; padding: 18px 18px 20px;
+  border: 1px solid var(--line); border-radius: 12px; background: #fafbfd;
+}
+.engine-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.engine-state {
+  font-weight: 700; font-size: 16px; padding: 3px 12px; border-radius: 999px;
+}
+.engine-state.state-off { background: #fbe4de; color: var(--red); }
+.engine-state.state-busy { background: #fdf0da; color: var(--amber); }
+.engine-state.state-ok { background: #eaf6ef; color: var(--green); }
+.engine-detail { color: var(--ink-soft); font-size: 13.5px; }
+.engine-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0 4px; }
+.engine-actions button { flex: 0 1 auto; }
+.engine-card .field-label { margin-top: 20px; }
+.engine-log {
+  margin: 0; padding: 12px 0 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-all;
+  color: var(--ink-soft); max-height: 260px; overflow-y: auto;
+}
+
 .doctor-panel { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
 .doctor-row { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: flex-start; }
 .doctor-tag {

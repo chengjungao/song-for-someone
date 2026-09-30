@@ -101,6 +101,7 @@
         <button id="btn-songs" class="ghost" type="button">我的作品</button>
       </div>
       <p id="form-hint" class="form-hint hidden"></p>
+      <p id="form-note" class="form-note hidden"></p>
     </section>
 
     <!-- ===================== 生成中 ===================== -->
@@ -130,6 +131,7 @@
           <a id="result-download" class="primary" download>下载到电脑</a>
           <button id="btn-again" class="ghost" type="button">再来一版</button>
           <button id="btn-edit" class="ghost" type="button">改改歌词再出</button>
+          <button id="btn-home" class="ghost" type="button">回到首页</button>
         </div>
         <div id="result-files" class="result-files"></div>
         <details class="advanced">
@@ -166,11 +168,39 @@
     <section id="screen-env" class="screen hidden">
       <h2 id="env-title">出歌的程序还没打开</h2>
       <p id="env-lead" class="lead"></p>
+
+      <div id="engine-card" class="engine-card">
+        <div class="engine-head">
+          <span id="engine-state" class="engine-state state-off">正在检查…</span>
+          <span id="engine-state-detail" class="engine-detail"></span>
+        </div>
+
+        <div class="engine-actions">
+          <button id="btn-engine-start" class="primary" type="button">启动出歌程序</button>
+          <button id="btn-engine-stop" class="ghost" type="button">停止出歌程序</button>
+        </div>
+        <p id="engine-stop-hint" class="note hidden"></p>
+
+        <label class="field-label" for="engine-root">
+          便携包位置
+          <small>（程序会自己找；找不到就把解压出来的那个文件夹路径填这儿，再点启动）</small>
+        </label>
+        <input id="engine-root" type="text" placeholder="例如 D:\Works\ACE-Step-1.5-portable"
+          autocomplete="off" spellcheck="false">
+        <p id="engine-package-note" class="note"></p>
+
+        <details id="engine-log-wrap" class="advanced hidden">
+          <summary>启动过程（出问题时要看的就是这里）</summary>
+          <pre id="engine-log" class="engine-log"></pre>
+        </details>
+      </div>
+
       <ol id="env-steps" class="steps-list">
-        <li>找到你解压 ACE-Step 的那个文件夹（名字里带 ACE-Step-1.5）。</li>
-        <li>双击里面的 <code>start_api_server.bat</code>。</li>
-        <li>等它出现一行带 8001 的字，再回到这里点「我再试一次」。</li>
+        <li>点上面的「启动出歌程序」，等它显示「已就绪」——第一次约 1 分钟，它在把模型载进显存。</li>
+        <li>它要是说找不到便携包，就把 ACE-Step-1.5-portable 文件夹的完整路径填到上面，再点一次启动。</li>
+        <li>还没下载便携包，或者想先看看到底缺什么，点下面的「查看完整环境自检」。</li>
       </ol>
+
       <div class="actions">
         <button id="btn-retry" class="primary" type="button">我再试一次</button>
         <button id="btn-doctor" class="ghost" type="button">查看完整环境自检</button>

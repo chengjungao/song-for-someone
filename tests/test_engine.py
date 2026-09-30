@@ -789,5 +789,374 @@ class TestStatusConstants(unittest.TestCase):
         self.assertEqual(engine.ENGINE_PRELOAD_ENV, {"ACESTEP_NO_INIT": "false"})
 
 
+# ---------------------------------------------------------------- 控制器
+
+
+def make_handle(alive=True, pid=4242):
+    """造一个假句柄。假进程，不真的起任何东西。"""
+    return engine.EngineHandle(
+        process=FakeProcess(exit_code=None if alive else 0, pid=pid),
+        root=Path("D:/fake-portable"),
+        python_exe=Path("D:/fake-portable/python_embeded/python.exe"),
+        log_path=Path("D:/fake-portable/_api_run.log"),
+    )
+
+
+class ControllerCase(unittest.TestCase):
+    """控制器的公共前提：探测、健康检查、启停全部换成假的，不碰真实环境。
+
+    默认状态是「没服务、没便携包」，每个用例按需覆盖其中一项。
+    """
+
+    def setUp(self):
+        self.ctl = engine.EngineController(base_url="http://127.0.0.1:65500")
+        self._patch("is_port_open", return_value=False)
+        self._patch("is_engine_up", return_value=False)
+        self._patch("find_package_root", return_value=None)
+        self._patch("remembered_root", return_value=None)
+
+    def _patch(self, name, **kwargs):
+        """换掉 engine 里的一个符号，返回那个假对象（带 assert_called_* 系列）。"""
+        patcher = mock.patch.object(engine, name, **kwargs)
+        fake = patcher.start()
+        self.addCleanup(patcher.stop)
+        return fake
+
+    def new_controller(self, root_hint=None):
+        """换一个带初始 root_hint 的控制器（走公开的构造参数，不碰私有字段）。"""
+        return engine.EngineController(
+            base_url="http://127.0.0.1:65500", root_hint=root_hint
+        )
+
+    def wait_job(self, timeout=5.0):
+        """等后台那次启动结束。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.ctl.snapshot()["job"]["status"] != engine.JOB_STARTING:
+                return
+            time.sleep(0.02)
+        self.fail("后台启动没有在预期时间内结束")
+
+
+class TestControllerSnapshot(ControllerCase):
+    """控制器给界面的那份状态。"""
+
+    def test_off_when_service_down(self):
+        snap = self.ctl.snapshot()
+        self.assertEqual(snap["service"], "off")
+        self.assertFalse(snap["starting"])
+        self.assertFalse(snap["can_stop"])
+        self.assertIn("没找到", snap["package"]["note"])
+        self.assertEqual(snap["job"]["status"], engine.JOB_IDLE)
+
+    def test_running(self):
+        self._patch("is_port_open", return_value=True)
+        self._patch("is_engine_up", return_value=True)
+        snap = self.ctl.snapshot()
+        self.assertEqual(snap["service"], "running")
+        self.assertIn("已连上", snap["service_detail"])
+
+    def test_initializing_is_its_own_state(self):
+        """端口开着但 /health 不通 = 有人在起它。别把它当成「没在跑」。"""
+        self._patch("is_port_open", return_value=True)
+        snap = self.ctl.snapshot()
+        self.assertEqual(snap["service"], "initializing")
+        self.assertIn("初始化", snap["service_detail"])
+
+    def test_can_stop_only_for_a_live_handle_we_own(self):
+        self.assertFalse(self.ctl.snapshot()["can_stop"])
+        self.ctl.adopt(make_handle(alive=False))
+        self.assertFalse(self.ctl.snapshot()["can_stop"])
+        self.ctl.adopt(make_handle(alive=True))
+        self.assertTrue(self.ctl.snapshot()["can_stop"])
+
+    def test_stop_hint_explains_idle_case(self):
+        self.assertIn("没在运行", self.ctl.snapshot()["stop_hint"])
+
+    def test_stop_hint_explains_not_ours_case(self):
+        """别人起的引擎停不了 —— 界面得说清为什么，不能留个按了没反应的按钮。"""
+        self._patch("is_port_open", return_value=True)
+        self._patch("is_engine_up", return_value=True)
+        hint = self.ctl.snapshot()["stop_hint"]
+        self.assertIn("不是从这个界面起的", hint)
+
+    def test_no_stop_hint_when_we_can_stop(self):
+        self.ctl.adopt(make_handle(alive=True))
+        self.assertEqual(self.ctl.snapshot()["stop_hint"], "")
+
+    def test_job_public_shape(self):
+        job = engine.EngineJob(status=engine.JOB_FAILED, message="坏了")
+        job.started_at = time.time() - 3
+        job.finished_at = time.time()
+        public = job.to_public()
+        self.assertEqual(public["status"], engine.JOB_FAILED)
+        self.assertEqual(public["message"], "坏了")
+        self.assertEqual(public["lines"], [])
+        self.assertGreaterEqual(public["elapsed"], 2.5)
+
+
+class TestControllerLocate(ControllerCase):
+    """便携包在哪、哪套 Python 能用。"""
+
+    def test_finds_package_automatically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            self._patch("find_package_root", return_value=root)
+            pkg = self.ctl.locate()
+        self.assertEqual(pkg["root"], str(root))
+        self.assertEqual(pkg["source"], engine.SOURCE_AUTO)
+        self.assertTrue(pkg["usable"])
+        self.assertTrue(pkg["has_torch"])
+        self.assertTrue(pkg["python_exe"].endswith("python.exe"))
+
+    def test_labels_the_remembered_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            self._patch("find_package_root", return_value=root)
+            self._patch("remembered_root", return_value=root)
+            pkg = self.ctl.locate()
+        self.assertEqual(pkg["source"], engine.SOURCE_REMEMBERED)
+
+    def test_manual_path_wins_and_skips_the_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = make_portable(Path(tmp) / "手动")
+            auto = make_portable(Path(tmp) / "自动")
+            self._patch("validate_package_root", return_value=(manual, ""))
+            finder = self._patch("find_package_root", return_value=auto)
+            pkg = self.new_controller(root_hint=str(manual)).locate(refresh=True)
+        self.assertEqual(pkg["root"], str(manual))
+        self.assertEqual(pkg["source"], engine.SOURCE_MANUAL)
+        finder.assert_not_called()
+
+    def test_manual_failure_still_falls_back_to_auto(self):
+        """填错一次不该把自动查找也废掉 —— 但要老实说清你填的那个为什么不行。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            auto = make_portable(Path(tmp) / "自动")
+            self._patch("validate_package_root", return_value=(None, "没有这个文件夹：D:\\nope"))
+            self._patch("find_package_root", return_value=auto)
+            pkg = self.new_controller(root_hint="D:\\nope").locate(refresh=True)
+        self.assertEqual(pkg["root"], str(auto))
+        self.assertEqual(pkg["source"], engine.SOURCE_AUTO)
+        self.assertIn("用不了", pkg["note"])
+        self.assertIn("没有这个文件夹", pkg["note"])
+
+    def test_manual_failure_alone_reports_the_reason(self):
+        self._patch("validate_package_root", return_value=(None, "没有这个文件夹：D:\\nope"))
+        pkg = self.new_controller(root_hint="D:\\nope").locate(refresh=True)
+        self.assertIsNone(pkg["root"])
+        self.assertFalse(pkg["usable"])
+        self.assertIn("没有这个文件夹", pkg["note"])
+
+    def test_unusable_package_is_not_claimed_usable(self):
+        """目录在、但里面没 torch：要如实报 unusable，不能只因为找到了就当好用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp, with_torch=False)
+            self._patch("find_package_root", return_value=root)
+            pkg = self.ctl.locate()
+        self.assertFalse(pkg["usable"])
+        self.assertFalse(pkg["has_torch"])
+
+    def test_locate_caches_until_refresh(self):
+        finder = self._patch("find_package_root", return_value=None)
+        self.ctl.locate()
+        self.ctl.locate()
+        self.assertEqual(finder.call_count, 1)
+        self.ctl.locate(refresh=True)
+        self.assertEqual(finder.call_count, 2)
+
+
+class TestControllerStart(ControllerCase):
+    """启动：立刻返回，后台干活，进度写进 job。"""
+
+    def test_bad_root_is_rejected_before_anything_starts(self):
+        self._patch("validate_package_root", return_value=(None, "没有这个文件夹：D:\\nope"))
+        remember = self._patch("remember_root")
+        ensure = self._patch("ensure_engine")
+
+        result = self.ctl.start("D:\\nope")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "bad-root")
+        self.assertIn("没有这个文件夹", result["message"])
+        remember.assert_not_called()   # 错的路径不许写进配置
+        ensure.assert_not_called()     # 也不许真去起进程
+        self.assertEqual(self.ctl.snapshot()["job"]["status"], engine.JOB_FAILED)
+
+    def test_bad_root_stays_queryable_so_the_ui_can_explain(self):
+        self._patch("validate_package_root", return_value=(None, "这里不行"))
+        self.ctl.start("D:\\nope")
+        self.assertIn("这里不行", self.ctl.locate(refresh=True)["note"])
+
+    def test_good_root_is_remembered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_portable(tmp)
+            self._patch("validate_package_root", return_value=(root, ""))
+            remember = self._patch("remember_root")
+            self._patch("ensure_engine", return_value=engine.EngineOutcome(
+                status=engine.STARTED, message="引擎已启动"))
+
+            self.assertTrue(self.ctl.start(str(root))["ok"])
+            self.wait_job()
+
+        remember.assert_called_once_with(str(root))
+        self.assertEqual(self.ctl.root_hint, str(root))
+
+    def test_start_takes_ownership_of_the_new_handle(self):
+        handle = make_handle()
+        outcome = engine.EngineOutcome(
+            status=engine.STARTED, message="引擎已启动", handle=handle
+        )
+        self._patch("ensure_engine", return_value=outcome)
+        self.ctl.start()
+        self.wait_job()
+
+        self.assertIs(self.ctl.own_handle(), handle)
+        self.assertTrue(self.ctl.snapshot()["can_stop"])
+
+    def test_already_running_does_not_take_ownership(self):
+        """复用别人起的引擎：job 是 ready，但「停止」不该亮 —— 那不是我起的。"""
+        self._patch("ensure_engine", return_value=engine.EngineOutcome(
+            status=engine.ALREADY_UP, message="引擎已在运行"))
+        self.ctl.start()
+        self.wait_job()
+
+        self.assertEqual(self.ctl.snapshot()["job"]["status"], engine.JOB_READY)
+        self.assertIsNone(self.ctl.own_handle())
+
+    def test_failure_keeps_the_reason_in_message_and_lines(self):
+        self._patch("ensure_engine", return_value=engine.EngineOutcome(
+            status=engine.FAILED,
+            message="音乐引擎刚启动就退出了（退出码 1）。\n看日志找原因：D:\\x.log"))
+        self.ctl.start()
+        self.wait_job()
+
+        job = self.ctl.snapshot()["job"]
+        self.assertEqual(job["status"], engine.JOB_FAILED)
+        self.assertIn("退出码 1", job["message"])
+        self.assertTrue(any("退出码 1" in line for line in job["lines"]))
+
+    def test_second_start_while_starting_is_busy(self):
+        released = threading.Event()
+
+        def slow_ensure(**_kwargs):
+            released.wait(5.0)
+            return engine.EngineOutcome(status=engine.FAILED, message="算了")
+
+        self._patch("ensure_engine", side_effect=slow_ensure)
+        self.assertTrue(self.ctl.start()["ok"])
+        again = self.ctl.start()
+
+        self.assertFalse(again["ok"])
+        self.assertEqual(again["reason"], "busy")
+
+        released.set()
+        self.wait_job()
+
+    def test_log_callback_gets_the_same_lines_as_the_job(self):
+        seen = []
+
+        def fake_ensure(base_url=None, root_hint=None, log=None, **_kwargs):
+            log("找到便携包：D:\\x")
+            log("正在启动音乐引擎…")
+            return engine.EngineOutcome(status=engine.STARTED, message="ok")
+
+        self._patch("ensure_engine", side_effect=fake_ensure)
+        self.ctl.start(log=seen.append)
+        self.wait_job()
+
+        self.assertEqual(seen, ["找到便携包：D:\\x", "正在启动音乐引擎…"])
+        self.assertEqual(self.ctl.snapshot()["job"]["lines"], seen)
+
+    def test_log_callback_error_does_not_break_startup(self):
+        def boom(_line):
+            raise RuntimeError("回调自己炸了")
+
+        self._patch("ensure_engine", return_value=engine.EngineOutcome(
+            status=engine.STARTED, message="ok"))
+        self.ctl.start(log=boom)
+        self.wait_job()
+
+        self.assertEqual(self.ctl.snapshot()["job"]["status"], engine.JOB_READY)
+
+    def test_exception_in_thread_is_caught(self):
+        self._patch("ensure_engine", side_effect=RuntimeError("炸了"))
+        self.ctl.start()
+        self.wait_job()
+
+        job = self.ctl.snapshot()["job"]
+        self.assertEqual(job["status"], engine.JOB_FAILED)
+        self.assertIn("RuntimeError", job["message"])
+
+    def test_starting_flag_is_true_while_the_thread_is_working(self):
+        """界面靠这个标志决定要不要接着轮询，所以它必须在启动期间是 true。"""
+        released = threading.Event()
+
+        def slow_ensure(**_kwargs):
+            released.wait(5.0)
+            return engine.EngineOutcome(status=engine.STARTED, message="ok")
+
+        self._patch("ensure_engine", side_effect=slow_ensure)
+        self.ctl.start()
+
+        snapshot = self.ctl.snapshot()
+        self.assertTrue(snapshot["starting"])
+        self.assertEqual(snapshot["job"]["status"], engine.JOB_STARTING)
+
+        released.set()
+        self.wait_job()
+        self.assertFalse(self.ctl.snapshot()["starting"])
+
+
+class TestControllerStop(ControllerCase):
+    """停止：只停自己起的那个。"""
+
+    def test_without_handle_says_not_ours(self):
+        result = self.ctl.stop()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "not-ours")
+        self.assertIn("界面", result["message"])
+
+    def test_stops_our_engine_and_lets_go_of_the_handle(self):
+        handle = make_handle(alive=True)
+        self.ctl.adopt(handle)
+        killer = self._patch("stop_engine", return_value=True)
+
+        result = self.ctl.stop()
+
+        self.assertTrue(result["ok"])
+        killer.assert_called_once_with(handle)
+        self.assertIsNone(self.ctl.own_handle())
+        self.assertFalse(self.ctl.snapshot()["can_stop"])
+
+    def test_failure_to_stop_is_reported_not_swallowed(self):
+        self.ctl.adopt(make_handle(alive=True))
+        self._patch("stop_engine", return_value=False)
+
+        result = self.ctl.stop()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("任务管理器", result["message"])
+        self.assertIn("任务管理器", self.ctl.snapshot()["job"]["message"])
+
+    def test_stop_after_a_successful_start_resets_the_job(self):
+        handle = make_handle()
+        self._patch("ensure_engine", return_value=engine.EngineOutcome(
+            status=engine.STARTED, message="引擎已启动", handle=handle))
+        self.ctl.start()
+        self.wait_job()
+        self.assertEqual(self.ctl.snapshot()["job"]["status"], engine.JOB_READY)
+
+        self._patch("stop_engine", return_value=True)
+        self.ctl.stop()
+
+        self.assertEqual(self.ctl.snapshot()["job"]["status"], engine.JOB_IDLE)
+        self.assertIn("已停止", self.ctl.snapshot()["job"]["message"])
+
+    def test_stop_never_calls_with_a_missing_handle(self):
+        killer = self._patch("stop_engine", return_value=True)
+        self.ctl.stop()
+        killer.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -243,6 +243,53 @@ EXTRA_ROOT_SUFFIXES = (
     "Downloads/ACE-Step-1.5-portable",
 )
 
+# 用户在网页界面里手填过的便携包位置，记一行在仓库根的这个文件里。
+# 下次启动直接用它，不用再填一遍。
+REMEMBERED_ROOT_FILENAME = ".engine-root"
+
+
+def _remembered_root_file() -> Path:
+    """记住的位置存在哪个文件。测试可以改这个函数。"""
+    return Path(__file__).resolve().parent.parent / REMEMBERED_ROOT_FILENAME
+
+
+def remembered_root() -> Optional[Path]:
+    """读回上次记住的便携包目录。没有 / 读不出 / 内容为空都返回 ``None``。"""
+    try:
+        text = _remembered_root_file().read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return Path(line)
+    return None
+
+
+def remember_root(root: Path) -> Optional[Path]:
+    """把便携包目录记下来，返回落定后的路径；写不了返回 ``None``。
+
+    只记路径，不校验 —— 校验是 ``validate_package_root`` 的事。写不进去
+    （目录只读之类）也不该让启动失败，所以这里吞掉 OSError。
+    """
+    try:
+        resolved = Path(root).resolve()
+    except OSError:
+        resolved = Path(root)
+    try:
+        _remembered_root_file().write_text(str(resolved) + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return resolved
+
+
+def forget_root() -> None:
+    """忘掉记住的位置（文件本来就不在也无所谓）。"""
+    try:
+        _remembered_root_file().unlink()
+    except OSError:
+        pass
+
 
 def _search_bases() -> List[Path]:
     """候选目录的搜索基点：当前目录、用户主目录、各盘根目录。"""
@@ -260,8 +307,8 @@ def _search_bases() -> List[Path]:
 def candidate_roots(hint: Optional[str] = None) -> List[Path]:
     """按优先级列出便携包的候选目录，去重保序。
 
-    顺序即优先级：显式指定的 > 当前目录及其上两级 > 环境变量 > 常见落点 >
-    一层 ``ACE-Step*`` 通配。
+    顺序即优先级：显式指定的 > 界面上次记住的 > 当前目录及其上两级 >
+    环境变量 > 常见落点 > 一层 ``ACE-Step*`` 通配。
 
     只做固定候选加一层通配，**不扫全盘** —— 扫盘会让自检和启动都卡住。
     """
@@ -269,6 +316,11 @@ def candidate_roots(hint: Optional[str] = None) -> List[Path]:
 
     if hint:
         out.append(Path(hint))
+
+    # 界面上次手填过的位置，优先级仅次于本次显式指定
+    remembered = remembered_root()
+    if remembered is not None:
+        out.append(remembered)
 
     here = Path.cwd()
     out.extend([here, here.parent, here.parent.parent])
@@ -391,6 +443,79 @@ def find_site_packages(package_root: Path) -> Optional[Path]:
         except OSError:
             continue
     return None
+
+
+def _check_python_of(root: Path) -> tuple:
+    """便携包 ``root`` 里那套 Python 能不能用。返回 ``(root 或 None, 原因)``。"""
+    python_exe = find_embedded_python(root, require_torch=False)
+    if python_exe is None:
+        return None, (
+            f"{root} 里没找到 Python。\n"
+            "解压完整的便携包里应该有一个 python_embeded 文件夹。"
+        )
+    if not has_torch(python_exe):
+        try:
+            label = str(python_exe.relative_to(root))
+        except ValueError:
+            label = str(python_exe)
+        return None, (
+            f"找到了 {label}，但它没装 torch，起不了服务。\n"
+            "多半是上游脚本误用的那个 .venv 空壳（上游 start_api_server.bat 判的目录名\n"
+            "比实际多一个 n）。重新解压一次便携包就好。"
+        )
+    return root, ""
+
+
+def validate_package_root(raw: object) -> tuple:
+    """检查用户手填的便携包路径。返回 ``(root 或 None, 原因)``。
+
+    原因写给用户看，所以要说清「到底哪儿不对」而不是笼统一句「无效路径」。
+
+    顺手容错两件事：路径首尾的引号与空格（从资源管理器「复制文件地址」常带），
+    以及用户填成了上级目录（比如填 ``D:\\Works``，而便携包在它下面一层）。
+    """
+    text = str(raw if raw is not None else "").strip()
+    # 资源管理器复制出来的是带引号的，用户也常把整句话粘进来
+    text = text.strip('"').strip("'").strip()
+    if not text:
+        return None, "请先把便携包文件夹的完整路径粘进来。"
+
+    path = Path(text)
+    try:
+        is_dir = path.is_dir()
+    except OSError:
+        is_dir = False
+    if not is_dir:
+        return None, (
+            f"没有这个文件夹：{path}\n"
+            "路径建议从资源管理器的地址栏复制；或者按住 Shift 右键那个文件夹，"
+            "选「复制文件地址」。"
+        )
+
+    # 填的就是便携包本身
+    if (path / PACKAGE_MARKER).is_dir():
+        return _check_python_of(path)
+
+    # 不是 —— 最常见的是填了上级目录，往下找一层
+    try:
+        children = sorted(p for p in path.iterdir() if p.is_dir())
+    except OSError:
+        children = []
+
+    found = [child for child in children[:256] if (child / PACKAGE_MARKER).is_dir()]
+    if len(found) == 1:
+        return _check_python_of(found[0])
+    if len(found) > 1:
+        names = "、".join(child.name for child in found[:5])
+        return None, (
+            f"{path} 下面有好几个像便携包的文件夹（{names}…）。\n"
+            "请把具体那一个的路径填进来。"
+        )
+    return None, (
+        f"{path} 里没找到便携包。\n"
+        f"解压出来的便携包，应该是一个里面同时有 {PACKAGE_MARKER} 和 "
+        "python_embeded 两个文件夹的目录。请确认填的是它，而不是压缩包本身。"
+    )
 
 
 def check_package_root(report: DoctorReport, package_root: Optional[Path]) -> None:

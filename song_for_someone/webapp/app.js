@@ -328,6 +328,7 @@
   }
 
   function submitGenerate() {
+    hideFormNote();
     var payload = collectPayload();
     if (!payload.prompt || !payload.lyrics.trim()) {
       var hint = $('form-hint');
@@ -614,6 +615,159 @@
     show('screen-result');
   }
 
+  // ---------------------------------------------------------------- 出歌程序（引擎）
+  // 界面能自己把出歌程序起起来，也能停掉它 —— 但**只停自己起的那个**。
+  // 别人起的（启动窗口、便携包里的「启动引擎.bat」）这里停不了，后端会说明原因。
+  var engineBox = { timer: null, lastFilledRoot: null };
+
+  var SOURCE_LABEL = {
+    manual: '你填的',
+    remembered: '上次你填的',
+    auto: '程序自己找到的'
+  };
+
+  function loadEngine(refresh) {
+    return api('/api/engine' + (refresh ? '?refresh=1' : ''))
+      .then(function (data) {
+        renderEngine(data);
+        return data;
+      })
+      .catch(function () {
+        setEngineState('state-off', '状态读不出来', '刷新一下页面再试。');
+        return null;
+      });
+  }
+
+  function setEngineState(cls, text, detail) {
+    var node = $('engine-state');
+    node.classList.remove('state-off', 'state-busy', 'state-ok');
+    node.classList.add(cls);
+    node.textContent = text;
+    $('engine-state-detail').textContent = detail || '';
+  }
+
+  function renderEngine(data) {
+    var job = data.job || {};
+    var starting = !!data.starting;
+
+    if (starting) {
+      setEngineState('state-busy',
+        '正在启动出歌程序…（已等 ' + Math.round(job.elapsed || 0) + ' 秒）',
+        '第一次约 1 分钟，它在把模型载进显存。页面别关，也别重复点。');
+    } else if (data.service === 'running') {
+      setEngineState('state-ok', '出歌程序已就绪', data.service_detail || '');
+    } else if (data.service === 'initializing') {
+      setEngineState('state-busy', '出歌程序正在初始化…', data.service_detail || '');
+    } else if (job.status === 'failed') {
+      setEngineState('state-off', '出歌程序没起来', '下面「启动过程」里写了原因。');
+    } else {
+      setEngineState('state-off', '出歌程序没在运行', data.service_detail || '');
+    }
+
+    var startBtn = $('btn-engine-start');
+    startBtn.disabled = starting;
+    startBtn.textContent = starting ? '正在启动…' : '启动出歌程序';
+    $('btn-engine-stop').disabled = !data.can_stop;
+
+    // 「停止」按不了的时候要说清为什么，否则用户会以为按钮坏了
+    var hint = $('engine-stop-hint');
+    if (data.stop_hint && data.service !== 'off') {
+      hint.textContent = data.stop_hint;
+      hint.classList.remove('hidden');
+    } else {
+      hint.textContent = '';
+      hint.classList.add('hidden');
+    }
+
+    renderPackage(data.package || {});
+    renderEngineLog(job);
+  }
+
+  function renderPackage(pkg) {
+    var input = $('engine-root');
+    var note = $('engine-package-note');
+
+    // 只在用户没自己改过输入框时才回填，免得打字打到一半被覆盖
+    if (pkg.root && (!input.value || input.value === engineBox.lastFilledRoot)) {
+      input.value = pkg.root;
+    }
+    engineBox.lastFilledRoot = pkg.root || null;
+
+    if (pkg.note) {
+      // 手填的路径有问题时，后端把具体原因写在这儿
+      note.textContent = pkg.note;
+      return;
+    }
+    if (pkg.usable) {
+      note.textContent = '用的是这个：' + pkg.root
+        + '（' + (SOURCE_LABEL[pkg.source] || '已找到') + '）';
+      return;
+    }
+    note.textContent = pkg.manual_reason || '';
+  }
+
+  function renderEngineLog(job) {
+    var lines = job.lines || [];
+    var wrap = $('engine-log-wrap');
+    if (!lines.length && job.status !== 'starting') {
+      wrap.classList.add('hidden');
+      return;
+    }
+    $('engine-log').textContent = lines.length ? lines.join('\n') : '正在准备…';
+    wrap.classList.remove('hidden');
+  }
+
+  function pollEngine() {
+    if (engineBox.timer) { clearTimeout(engineBox.timer); engineBox.timer = null; }
+    loadEngine(false).then(function (data) {
+      if (data && data.starting) {
+        engineBox.timer = setTimeout(pollEngine, 1500);
+        return;
+      }
+      // 启动结束了：顶栏角标也该跟着变
+      loadEnv();
+    });
+  }
+
+  function startEngine() {
+    if (engineBox.timer) { clearTimeout(engineBox.timer); engineBox.timer = null; }
+    $('btn-engine-start').disabled = true;
+    $('btn-engine-start').textContent = '正在启动…';
+
+    api('/api/engine/start', {
+      method: 'POST',
+      body: { root: $('engine-root').value.trim() }
+    }).then(function (data) {
+      renderEngine(data);
+      pollEngine();
+    }).catch(function (err) {
+      $('btn-engine-start').disabled = false;
+      $('btn-engine-start').textContent = '启动出歌程序';
+      // 后端会把「你填的位置为什么不行」写进 package.note，这里只兜底
+      loadEngine(true).then(function (data) {
+        var pkg = (data && data.package) || {};
+        if (!pkg.note && !pkg.manual_reason) {
+          $('engine-package-note').textContent = err.message || '启动不了。';
+        }
+      });
+    });
+  }
+
+  function stopEngine() {
+    $('btn-engine-stop').disabled = true;
+    api('/api/engine/stop', { method: 'POST', body: {} })
+      .then(function (data) {
+        renderEngine(data);
+        loadEnv();
+      })
+      .catch(function (err) {
+        var hint = $('engine-stop-hint');
+        hint.textContent = err.message || '停不了。';
+        hint.classList.remove('hidden');
+        loadEngine(true);
+      });
+  }
+
   // ---------------------------------------------------------------- 环境页
   function showEnv(message, title, lead) {
     $('env-title').textContent = title || '出歌的程序还没打开';
@@ -622,12 +776,16 @@
         + ' 你电脑上负责「真正写歌」的那个程序没有在运行，所以现在点也没用。'
         + '它是另外的一个软件，需要先单独打开它。');
     $('doctor-panel').classList.add('hidden');
+    $('env-steps').classList.remove('hidden');
     show('screen-env');
     loadEnv();
+    loadEngine(true);
   }
 
   function openEnvCheck() {
     showEnv('', '环境自检', '下面是这台电脑的出歌环境情况。有问题的项目都写清了怎么办。');
+    // 自检页用不着那三步引导，直接让检查结果说话
+    $('env-steps').classList.add('hidden');
     loadDoctor();
   }
 
@@ -710,11 +868,63 @@
     show('screen-form');
   }
 
+  // ---------------------------------------------------------------- 表单复位
+  function hideFormNote() {
+    $('form-note').textContent = '';
+    $('form-note').classList.add('hidden');
+  }
+
+  function showFormNote(text) {
+    $('form-note').textContent = text;
+    $('form-note').classList.remove('hidden');
+  }
+
+  function clearLyrics() {
+    $('lyrics-input').value = '';
+    $('lyrics-count').textContent = '0 字 / 上限 4096';
+    $('lyrics-cjk').textContent = '汉字占比 —';
+    $('lyrics-check').classList.add('hidden');
+    state.lastReport = null;
+    state.forceNext = false;
+    state.yesNext = false;
+    $('btn-generate').textContent = '开始出歌';
+    $('btn-generate').classList.remove('warn');
+    $('form-hint').classList.add('hidden');
+  }
+
+  function resetAdvanced() {
+    $('field-fixed-id').value = '';
+    $('field-tempo').value = '';
+    $('field-tune').value = '';
+    $('field-steps').value = '8';
+    $('field-versions').value = '1';
+    $('field-file-type').value = 'mp3';
+    $('field-draft-first').checked = true;
+  }
+
+  /** 回到首页：把表单恢复成刚打开的样子，准备做新的一首。
+   *
+   * 清的是「这一首的输入」，不动已经出的歌 —— 刚才那首连同它的歌词都在
+   * 「我的作品」里，点「照这版再来一次」就能取回来，所以这里敢清干净。
+   */
+  function goHome() {
+    clearLyrics();
+    hideFormNote();
+    $('out-prefix').value = '';
+    resetAdvanced();
+    applyStyle($('style-select').value);   // 风格描述和默认时长回到模板值
+    show('screen-form');
+    showFormNote('已经清空了，可以开始新的一首。刚出的这首还在「我的作品」里，随时能取回来。');
+  }
+
   // ---------------------------------------------------------------- 事件绑定
   function bindEvents() {
     $('style-select').addEventListener('change', function (event) { applyStyle(event.target.value); });
 
-    $('lyrics-input').addEventListener('input', scheduleCheck);
+    $('lyrics-input').addEventListener('input', function () {
+      hideFormNote();
+      scheduleCheck();
+    });
 
     $('example-select').addEventListener('change', function (event) {
       var key = event.target.value;
@@ -727,16 +937,8 @@
     });
 
     $('btn-clear').addEventListener('click', function () {
-      $('lyrics-input').value = '';
-      $('lyrics-count').textContent = '0 字 / 上限 4096';
-      $('lyrics-cjk').textContent = '汉字占比 —';
-      $('lyrics-check').classList.add('hidden');
-      state.lastReport = null;
-      state.forceNext = false;
-      state.yesNext = false;
-      $('btn-generate').textContent = '开始出歌';
-      $('btn-generate').classList.remove('warn');
-      $('form-hint').classList.add('hidden');
+      clearLyrics();
+      hideFormNote();
     });
 
     $('btn-generate').addEventListener('click', submitGenerate);
@@ -754,8 +956,15 @@
     $('btn-doctor').addEventListener('click', loadDoctor);
     $('btn-back-form').addEventListener('click', function () { show('screen-form'); });
 
+    $('btn-engine-start').addEventListener('click', startEngine);
+    $('btn-engine-stop').addEventListener('click', stopEngine);
+    $('engine-root').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); startEngine(); }
+    });
+
     $('btn-again').addEventListener('click', function () { show('screen-form'); submitGenerate(); });
     $('btn-edit').addEventListener('click', function () { show('screen-form'); });
+    $('btn-home').addEventListener('click', goHome);
     $('btn-copy-reproduce').addEventListener('click', copyReproduce);
 
     $('btn-error-retry').addEventListener('click', function () { show('screen-form'); submitGenerate(); });

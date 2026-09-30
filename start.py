@@ -178,6 +178,12 @@ def main() -> int:
 
         try:
             from song_for_someone.web import main as web_main
+            from song_for_someone.web import set_engine_handle
+
+            # 把句柄交给界面：环境页那个「停止出歌程序」要停的就是这一个。
+            # 复用别人起的引擎时 engine_handle 是 None，界面那边会如实说「停不了」，
+            # 而不是显示一个按了没反应的按钮。
+            set_engine_handle(engine_handle)
 
             # 把多余的命令行参数透传给 web.main（例如 --port、--no-browser）。
             return web_main(web_args)

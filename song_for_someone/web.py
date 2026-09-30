@@ -130,6 +130,39 @@ _client_factory: Callable[[str, float], Any] = _default_client_factory
 _doctor_runner: Callable[..., DoctorReport] = run_doctor
 _base_url: str = DEFAULT_BASE_URL
 
+# 引擎控制器：进程内只此一个，懒建。界面里的「启动 / 停止出歌程序」都走它。
+# 测试可以整个换掉（塞一个假的进去），不必真去起引擎。
+_engine_controller: Optional[Any] = None
+# start.py 起的引擎句柄。它必须在 web.main() 之前交过来 —— 控制器是在那之后
+# 才建的，而「停止」按钮得有个真实句柄才停得掉。
+_injected_engine_handle: Optional[Any] = None
+
+
+def set_engine_handle(handle: Any) -> None:
+    """把一个外部起的引擎句柄交给界面（``start.py`` 用它）。
+
+    没有这一步的话，界面里的「停止出歌程序」手里只有 ``None`` —— 那个进程是
+    启动脚本起的，界面既不知道该停谁，也不该去猜。
+    """
+    global _injected_engine_handle
+    _injected_engine_handle = handle
+    controller = _engine_controller
+    if controller is not None:
+        controller.adopt(handle)
+
+
+def get_engine_controller() -> Any:
+    """拿进程内的引擎控制器（懒建）。"""
+    global _engine_controller
+    if _engine_controller is None:
+        from .engine import EngineController
+
+        controller = EngineController(base_url=_base_url)
+        if _injected_engine_handle is not None:
+            controller.adopt(_injected_engine_handle)
+        _engine_controller = controller
+    return _engine_controller
+
 
 # ------------------------------------------------------------------ 任务状态
 
@@ -702,6 +735,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(True, self._payload_env())
             elif path == "/api/doctor":
                 self._handle_doctor()
+            elif path == "/api/engine":
+                self._handle_engine(query)
             elif path == "/api/tasks/current":
                 current = store.current()
                 self._json(True, current.to_public() if current else None)
@@ -733,6 +768,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._handle_lyrics_check()
             elif path == "/api/generate":
                 self._handle_generate()
+            elif path == "/api/engine/start":
+                self._handle_engine_start()
+            elif path == "/api/engine/stop":
+                self._handle_engine_stop()
             else:
                 self._error(404, "not_found", "没有这个接口。")
         except (BrokenPipeError, ConnectionResetError):
@@ -829,6 +868,52 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(True, box["report"])
         else:
             self._error(500, "internal", "环境自检没能跑完。", box.get("error", ""))
+
+    # ------------------------------------------------------------ 引擎
+
+    def _handle_engine(self, query: Dict[str, List[str]]) -> None:
+        """引擎现状：服务在不在、便携包在哪、有没有正在启动。
+
+        ``?refresh=1`` 跳过几秒的探测缓存，强制重新找一遍便携包 —— 用户刚把
+        便携包解压到新位置时，界面用它立刻刷新，不用等缓存过期。
+        """
+        controller = get_engine_controller()
+        refresh = (query.get("refresh") or [""])[0] not in ("", "0", "false")
+        self._json(True, controller.snapshot(refresh=refresh))
+
+    def _handle_engine_start(self) -> None:
+        """启动出歌程序。
+
+        立刻返回（202），真正的等待在后台线程里 —— 冷启动要一两分钟，把请求
+        挂住只会让页面看起来死了。界面随后轮询 ``/api/engine`` 看进度。
+        """
+        try:
+            body = self._read_json_body()
+        except ValueError as exc:
+            self._error(400, "bad_request", "请求格式不对。", str(exc))
+            return
+
+        controller = get_engine_controller()
+        result = controller.start(body.get("root"))
+        if not result.get("ok"):
+            message = result.get("message") or "启动不了。"
+            if result.get("reason") == "busy":
+                self._error(409, "engine_busy", message)
+            else:
+                # 路径填错是最常见的失败，把具体原因原样交给界面：
+                # 「没有这个文件夹」「找到了 Python 但没装 torch」比一句「失败了」有用得多
+                self._error(422, "bad_engine_root", message)
+            return
+        self._json(True, controller.snapshot(refresh=True), status=202)
+
+    def _handle_engine_stop(self) -> None:
+        """停止出歌程序。只停**我们自己起的**那个，别人起的不顺手关。"""
+        controller = get_engine_controller()
+        result = controller.stop()
+        if not result.get("ok") and result.get("reason") == "not-ours":
+            self._error(409, "engine_not_ours", result.get("message") or "")
+            return
+        self._json(True, controller.snapshot(refresh=True))
 
     def _handle_lyrics_check(self) -> None:
         try:
@@ -1224,6 +1309,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     _base_url = args.base_url
     if args.out_dir:
         SONGS_DIR = Path(args.out_dir).resolve()
+
+    # 控制器要在 _base_url 定下来之后再建，否则它会拿着默认地址去探测上游
+    get_engine_controller().set_base_url(_base_url)
 
     return serve(
         host=args.host,
