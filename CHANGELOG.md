@@ -214,8 +214,8 @@ cp1252 编不出「音乐引擎」，`print` 抛 `UnicodeEncodeError`。
 - `.gitignore` 补 `.engine-root`（每台机器不一样，不该进仓库）。
 - 新增 `.gitattributes`：`*.bat` / `*.cmd` 固定 `eol=crlf`。
 - `docs/03-常见问题.md`、`docs/04-图形界面使用.md` 补上界面启停与手填路径两节。
-- 测试 276 → 343 条（`test_doctor` +18、`test_engine` +31、`test_web` +15、
-  `test_web_qa` 的控制台编码 +3）。
+- 测试 276 → 344 条（`test_doctor` +18、`test_engine` +31、`test_web` +15、
+  `test_web_qa` 的控制台编码 +4）。
   `test_web` 里的假控制器改成照真实行为把停止文案写进 `job.message` ——
   原先它自己硬编一句，测的其实是假对象。
 - `common.setup_console()` 成为输出编码的唯一实现（原来只在 `cli.py` 里，且入口没都用上）。

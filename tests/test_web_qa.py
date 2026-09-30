@@ -964,6 +964,38 @@ class TestConsoleEncoding(unittest.TestCase):
                 f"中文提示语会在英文 Windows 上抛 UnicodeEncodeError",
             )
 
+    def test_tests_package_fixes_stdio(self):
+        """测试进程自己也要先把输出编码固定住。
+
+        上面那个测试管的是三个**入场口**，这里是第四个需要做准备的地方：测试
+        经常直接调内部函数，绕过了入口那一步，于是产品代码里第一句中文提示
+        就会在英文 Windows 上抛 UnicodeEncodeError。
+
+        症状很迷惑人：挂掉的总是字母序最靠前的几个 —— 只要有一个测试跑过
+        ``main()``，stdout 就被永久改成 UTF-8，后面的测试跟着沾光，所以
+        「哪几条红」甚至取决于测试名字。2026-09-30 CI 上 windows 四个格子
+        全红，根因就是这个。
+
+        为什么要用 AST 而不是直接断言 ``sys.stdout.encoding``：本机是 UTF-8，
+        删掉那行照样绿 —— 只有在英文 Windows 上才看得出来。查源码才能让
+        本机也抓得到。
+        """
+        tree = ast.parse(
+            (ROOT / "tests" / "__init__.py").read_text(encoding="utf-8")
+        )
+        called = {
+            node.value.func.id
+            for node in tree.body  # 只认模块级调用，不认函数体里的
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        }
+        self.assertIn(
+            "setup_console", called,
+            "tests/__init__.py 没在模块级调 setup_console()："
+            "在英文或中文 Windows 上，产品代码打印的第一句中文就会让测试崩",
+        )
+
 
 # ============================================================ 启动脚本
 
