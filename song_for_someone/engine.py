@@ -22,17 +22,20 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .client import DEFAULT_BASE_URL, AceStepClient
+# 便携包怎么找、哪套 Python 能用，全都由 doctor 说了算 —— 起服务和自检必须
+# 用同一个判据，否则就会出现「引擎自己找得到、自检说没有」这种怪事。
+from .doctor import (
+    EMBEDDED_DIR_ALIASES,
+    find_package_root,
+    has_torch,
+)
+from .doctor import find_embedded_python as _find_embedded_python
 
 # ---------------------------------------------------------------- 常量
-
-# 便携包里自带 Python 的目录名。两种拼写都认：上游文档用短的那个，
-# 上游脚本用长的那个，谁也说不准下一个版本会叫哪个。
-EMBEDDED_DIR_ALIASES = ("python_embeded", "python_embedded")
 
 ENGINE_MODULE = "acestep.api_server"
 DEFAULT_LOG_NAME = "_api_run.log"
 TRITON_CACHE_DIRNAME = "_triton_cache"
-
 # 让上游在**启动时**就把模型载入显存，而不是拖到第一次出歌。
 #
 # 上游默认是懒加载（`ACESTEP_NO_INIT` 默认 true，见上游
@@ -49,14 +52,6 @@ HEALTH_TIMEOUT = 2.0
 # 所以等待上限给得宽一些。子进程半路退出会立刻判失败，不会真白等这么久。
 READY_TIMEOUT = 1800.0
 POLL_INTERVAL = 2.0
-
-# 便携包常见的落点。只做固定候选 ＋ 一层通配，不扫全盘。
-EXTRA_ROOTS = (
-    "ACE-Step-1.5-portable",
-    "Works/ACE-Step-1.5-portable",
-    "AI/ACE-Step-1.5-portable",
-    "Downloads/ACE-Step-1.5-portable",
-)
 
 # 状态常量
 ALREADY_UP = "already-up"
@@ -88,112 +83,27 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def has_torch(python_exe: Path) -> bool:
-    """便携包里那套 Python 有没有 torch。
-
-    只看 site-packages，不起子进程 —— 启动路径上不该多花几秒去 import torch。
-    这一关就是用来挡 ``.venv`` 那种空壳的。
-
-    两种目录布局都要认：Windows 便携包是 ``python_embeded\\python.exe`` ＋
-    ``Lib\\site-packages``，类 Unix 是 ``python_embeded/bin/python3`` ＋
-    ``lib/site-packages``（后者要在上一层找）。
-    """
-    bases = dict.fromkeys([python_exe.parent, python_exe.parent.parent])
-    for base in bases:
-        for name in ("Lib", "lib"):
-            try:
-                if (base / name / "site-packages" / "torch").is_dir():
-                    return True
-            except OSError:
-                continue
-    return False
-
-
-def find_embedded_python(package_root: Path) -> Optional[Path]:
+def find_embedded_python(
+    package_root: Path,
+    require_torch: bool = True,
+) -> Optional[Path]:
     """在便携包里找那套**真能干活**的 Python。
 
-    找到候选还不够，必须确认它带了 torch。否则会出现「找到了 Python，
-    一起服务就 ModuleNotFoundError: torch」这种更难懂的报错。
+    这边默认就要带 torch —— 起服务时找到一套没 torch 的 Python 没有意义，
+    只会把错误推后成更难懂的 ``ModuleNotFoundError``。要宽松档（先找到再说、
+    把「没 torch」当成一个具体问题报出来）走 ``doctor.find_embedded_python``。
     """
-    for name in EMBEDDED_DIR_ALIASES:
-        for relative in (("python.exe",), ("bin", "python3"), ("bin", "python")):
-            exe = package_root.joinpath(name, *relative)
-            try:
-                if exe.is_file() and has_torch(exe):
-                    return exe
-            except OSError:
-                continue
-    return None
-
-
-def _extra_candidates() -> List[Path]:
-    """便携包常见的落点。
-
-    ``D:\\Works\\ACE-Step-1.5-portable`` 这类是实测中很常见的放法。另外做一层
-    ``ACE-Step*`` 通配，兜住带版本号的目录名。
-    """
-    out: List[Path] = []
-
-    bases = [Path.home()]
-    for drive in ("C:", "D:", "E:", "F:"):
-        anchor = Path(drive + os.sep)
-        try:
-            if anchor.is_dir():
-                bases.append(anchor)
-        except OSError:
-            continue
-
-    for base in bases:
-        for suffix in EXTRA_ROOTS:
-            try:
-                out.append(base / suffix)
-            except OSError:
-                continue
-
-    # 一层通配，兜住 ACE-Step-1.5 / ACE-Step-1.6 这类带版本号的目录
-    for base in list(bases):
-        try:
-            if base.is_dir():
-                out.extend(sorted(p for p in base.glob("ACE-Step*") if p.is_dir()))
-        except OSError:
-            continue
-
-    return out
+    return _find_embedded_python(package_root, require_torch=require_torch)
 
 
 def discover_root(hint: Optional[str] = None) -> Optional[Path]:
     """找一个**能真起服务**的便携包根目录。
 
-    判定要比 ``doctor.find_package_root`` 严一档：那边只要求目录结构像，
-    这里还要求里面那套 Python 带了 torch。
+    候选目录、Python 定位、torch 校验都在 ``doctor`` 里，这里只是以「必须带
+    torch」的口径调一次。判据严一档是必要的：光看目录结构像，会把那个空的
+    ``.venv`` 也放进来，最后报的错变成难懂的 ``ModuleNotFoundError``。
     """
-
-    def usable(candidate: Optional[Path]) -> Optional[Path]:
-        if candidate is None:
-            return None
-        try:
-            if candidate.is_dir() and find_embedded_python(candidate):
-                return candidate.resolve()
-        except OSError:
-            return None
-        return None
-
-    from .doctor import find_package_root
-
-    if hint:
-        found = usable(Path(hint))
-        if found:
-            return found
-
-    found = usable(find_package_root(hint))
-    if found:
-        return found
-
-    for candidate in _extra_candidates():
-        found = usable(candidate)
-        if found:
-            return found
-    return None
+    return find_package_root(hint, require_torch=True)
 
 
 # ---------------------------------------------------------------- 拉起
@@ -449,7 +359,7 @@ def ensure_engine(
         emit("没找到 ACE-Step 便携包。")
         return EngineOutcome(status=NO_ROOT, message=message)
 
-    python_exe = find_embedded_python(root)
+    python_exe = find_embedded_python(root, require_torch=True)
     if python_exe is None:
         message = (
             f"{root} 里没找到可用的 Python。\n"

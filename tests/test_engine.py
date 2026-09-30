@@ -228,34 +228,31 @@ class TestDiscoverRoot(unittest.TestCase):
     def test_hint_rejected_without_torch(self):
         """结构像但没有 torch —— 不能用，必须继续找下一个候选。
 
-        这里要把「常见落点」和 ``find_package_root`` 都堵掉，否则会扫到本机
-        真实存在的便携包，测试就变成在断言开发机的环境了。
+        候选目录只有 doctor 一个来源，堵掉它就等于堵掉全盘的常见落点，
+        否则会扫到本机真实存在的便携包，测试就变成在断言开发机的环境了。
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = make_portable(tmp, with_torch=False)
-            with mock.patch.object(engine, "_extra_candidates", return_value=[]):
-                with mock.patch(
-                    "song_for_someone.doctor.find_package_root", return_value=None
-                ):
-                    self.assertIsNone(engine.discover_root(str(root)))
+            with mock.patch(
+                "song_for_someone.doctor.candidate_roots", return_value=[]
+            ):
+                self.assertIsNone(engine.discover_root(str(root)))
 
     def test_hint_rejected_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(engine, "_extra_candidates", return_value=[]):
-                with mock.patch(
-                    "song_for_someone.doctor.find_package_root", return_value=None
-                ):
-                    self.assertIsNone(engine.discover_root(str(Path(tmp) / "nope")))
+            with mock.patch(
+                "song_for_someone.doctor.candidate_roots", return_value=[]
+            ):
+                self.assertIsNone(engine.discover_root(str(Path(tmp) / "nope")))
 
     def test_returns_none_when_nothing_usable(self):
         with tempfile.TemporaryDirectory() as tmp:
             empty = Path(tmp) / "totally-empty"
             empty.mkdir()
-            with mock.patch.object(engine, "_extra_candidates", return_value=[]):
-                with mock.patch(
-                    "song_for_someone.doctor.find_package_root", return_value=None
-                ):
-                    self.assertIsNone(engine.discover_root(str(empty)))
+            with mock.patch(
+                "song_for_someone.doctor.candidate_roots", return_value=[]
+            ):
+                self.assertIsNone(engine.discover_root(str(empty)))
 
 
 class TestPortProbe(unittest.TestCase):

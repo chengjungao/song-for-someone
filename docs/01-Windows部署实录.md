@@ -164,6 +164,15 @@ torch: 2.7.1+cu128 | CUDA: True
 `ModuleNotFoundError: No module named 'torch'`，比 triton 那个还难懂 ——
 因为「明明找到了 Python」。
 
+`sfs doctor` 会专门报一行「便携包自带 Python」，写明实际用的是哪一套：
+
+```text
+[ OK ] 便携包自带 Python
+        python_embeded\python.exe ｜ 带 torch
+```
+
+只剩 `.venv` 时这一项会指名道姓，并在修复建议里写清上游那个拼写坑。
+
 ### 官方 `start_api_server.bat` 起不来
 
 它第 124 行判的是：
@@ -187,8 +196,11 @@ python_embeded\python.exe -m acestep.api_server --host 127.0.0.1 --port 8001 --d
 便携包根目录放了一份修正版 `启动引擎.bat`（新文件，不动上游原文件，
 免得被它的更新检查覆盖），想只起引擎不起界面时双击它。
 
-`sfs doctor` 与 `tools/patch_windows_triton.py` 判的也是 `python_embeded`，
-口径与上面这条命令一致。
+`sfs doctor` 和双击启动认的是同一套判据：找便携包时 `python_embeded` 与
+`python_embedded` 两种拼写都接受，并且要求里面那套 Python 真的带 `torch` 才算数。
+候选目录的枚举、Python 定位、torch 校验都定义在 `doctor` 里（`candidate_roots`
+与 `find_package_root`），起服务和自检共用这一份，不会各判各的。
+`tools/patch_windows_triton.py` 判的也是同一套目录名。
 
 ---
 

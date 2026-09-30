@@ -2,6 +2,49 @@
 
 本项目的重要变更都记在这里。版本号遵循语义化版本。
 
+## 0.2.2
+
+修 0.2.1 留下的一个不对称：引擎自己找得到便携包，环境自检却说「没找到」。
+
+根因是探测逻辑有两份。`engine.discover_root` 除了问 `doctor`，还自己补了一份常见
+落点（`Works/`、`Downloads/`、各盘根目录下一层 `ACE-Step*`）；而 `doctor` 那份只查
+当前目录和环境变量，判据还写死了 `python_embeded` 一个拼写。于是同一台机器上，
+双击能把引擎拉起来，`sfs doctor` 的「便携包 / triton 补丁 / diffusers 导入 /
+模型文件」四项全部跳过 —— 最需要自检的场景反而什么都查不出来。
+
+现在探测只剩一份，都收在 `doctor`，起服务和自检共用：
+
+- **`candidate_roots()`**：候选目录的唯一定义，顺序即优先级（显式指定 > 当前目录
+  及其上两级 > 环境变量 > 常见落点 > 一层 `ACE-Step*` 通配），结果去重保序。
+- **`find_package_root(hint, require_torch=...)`**：多了严格档。起服务传 `True`
+  （必须带 torch）；自检用默认的宽松档，好把「torch 缺失」当成一个具体问题报
+  出来，而不是笼统地说「没找到便携包」。
+- **`site_packages_of()`**：由 Python 可执行文件推 site-packages。`has_torch`、
+  `find_site_packages`、diffusers 导入、triton 补丁检查全部改走它，不再各自
+  拼 `python_embeded` 路径。
+
+新增一项自检「便携包自带 Python」：
+
+```text
+[ OK ] 便携包自带 Python
+        python_embeded\python.exe ｜ 带 torch
+```
+
+它专门报「实际用的是哪一套」。便携包里可能同时躺着 `python_embeded` 和 `.venv`，
+而 `.venv` 是个空壳；只剩 `.venv` 时这一项会指名道姓，并在修复建议里写清上游
+`start_api_server.bat` 判目录名多写一个 n 这个坑。
+
+变化：
+
+- 版本号 `0.2.1` → `0.2.2`。
+- `engine.py` 变薄：候选枚举、Python 定位、torch 校验移交给 `doctor`。
+  `has_torch` / `find_embedded_python` / `EMBEDDED_DIR_ALIASES` 仍从 `engine`
+  可导入；其中 `find_embedded_python` 在 engine 这边默认 `require_torch=True`
+  —— 起服务时找到一套没 torch 的 Python 毫无意义。
+- 测试：新增 `tests/test_doctor.py`（38 条）；`test_engine.py` 里原来要分别堵住
+  「常见落点」和 `find_package_root` 的三处 mock，合并成一处置空候选目录。
+- **`dependencies` 仍然为空。**
+
 ## 0.2.1
 
 把「双击就能用」这句话真正做实。0.2.0 的双击只开了界面，引擎还得自己开一个

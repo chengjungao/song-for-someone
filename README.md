@@ -114,10 +114,13 @@ https://files.acemusic.ai/acemusic/win/ACE-Step-1.5.7z
 ```bash
 git clone https://github.com/chengjungao/song-for-someone.git
 cd song-for-someone
-python -m song_for_someone doctor --package-root D:\Works\ACE-Step-1.5-portable
+python -m song_for_someone doctor
 ```
 
 不必安装，不必建虚拟环境。有个 Python 3.9 以上就行。
+
+自检会自己去找便携包（当前目录、用户主目录、各盘根目录，以及里面名字带
+`ACE-Step` 的文件夹）。装在不常见的位置时再加 `--package-root D:\你的目录`。
 
 输出长这样：
 
@@ -131,7 +134,13 @@ python -m song_for_someone doctor --package-root D:\Works\ACE-Step-1.5-portable
         http://127.0.0.1:8001 ／health 正常
 
 [ OK ] 显卡
-        NVIDIA GeForce RTX 4080 ｜ 显存 14724/16376 MiB ｜ 驱动 616.92
+        NVIDIA GeForce RTX 4080 ｜ 显存 12944/16376 MiB ｜ 驱动 616.92
+
+[ OK ] ACE-Step 便携包
+        D:\Works\ACE-Step-1.5-portable
+
+[ OK ] 便携包自带 Python
+        python_embeded\python.exe ｜ 带 torch
 
 [ OK ] triton 补丁
         已装 ｜ D:\Works\ACE-Step-1.5-portable\python_embeded\Lib\site-packages\sitecustomize.py
@@ -141,6 +150,11 @@ python -m song_for_someone doctor --package-root D:\Works\ACE-Step-1.5-portable
 
 [ OK ] 模型文件
         2/2 齐 ｜ D:\Works\ACE-Step-1.5-portable\checkpoints ｜ 约 9.4 GB
+
+[ OK ] 输出目录
+        songs ｜ 剩余 1150.7 GB
+==============================================================
+结论：环境没问题，可以出歌了。
 ```
 
 哪一项是「失败」，按它给的提示处理。**Windows 上十有八九会卡在 diffusers 导入**，见下一节。
@@ -232,7 +246,7 @@ diffusers 0.36.0
 
 | 命令 | 做什么 |
 |---|---|
-| `sfs doctor` | 环境自检：服务、显卡、补丁、模型、磁盘 |
+| `sfs doctor` | 环境自检：服务、显卡、便携包、自带 Python、补丁、模型、磁盘 |
 | `sfs check <歌词文件>` | 歌词结构体检，提交前跑 |
 | `sfs styles` | 列出内置风格模板 |
 | `sfs style <键名>` | 看某个模板的完整参数 |
@@ -335,8 +349,8 @@ song-for-someone/
 │   ├── common.py            命令行与网页共用的工具函数
 │   ├── lyrics.py            歌词解析与结构体检
 │   ├── styles.py            风格模板
-│   ├── doctor.py            环境自检
-│   ├── engine.py            上游引擎的探测与拉起（找便携包、起服务、等就绪）
+│   ├── doctor.py            环境自检 ＋ 便携包探测（找 Python、site-packages）
+│   ├── engine.py            拉起上游引擎（起服务、等就绪、停服务）
 │   ├── web.py               本地网页服务（标准库 http.server）
 │   └── webapp/              网页界面静态资源（手写，无构建）
 │       ├── index.html
@@ -350,7 +364,7 @@ song-for-someone/
 ├── examples/                可直接跑的示例
 ├── docs/                    部署实录、实测数据、常见问题、图形界面说明
 │   └── design/              PRD 与架构设计文档
-├── tests/                   237 个单元测试，零依赖
+├── tests/                   276 个单元测试，零依赖
 ├── screenshots/             界面截图（公众号文章用）
 ├── .github/workflows/       CI：跑测试
 ├── CHANGELOG.md

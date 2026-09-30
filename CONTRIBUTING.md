@@ -38,7 +38,29 @@ python start.py          # 或 Windows 上双击 启动.bat
 - 新增引擎相关的能力，补 `tests/test_engine.py` —— 用临时目录造假便携包、用假进程
   和假服务。**测试里绝不许真去拉 ACE-Step 引擎**：一次冷启动要两三分钟，还会占满
   显存。凡是跑 `start.py` 的用例，务必带上 `--no-engine`。
+- 新增便携包探测相关的改动（候选目录、Python 定位、torch 校验），补
+  `tests/test_doctor.py`。用例里凡是要走候选目录的，先把 `candidate_roots` 限死成
+  临时目录，否则会扫到本机真实存在的便携包，测试就变成在断言开发机的环境。
 - 提交信息用中文，说清「改了什么、为什么」。
+
+## 模块职责：探测只有一份
+
+**「便携包在哪、哪套 Python 能用」只定义在 `doctor` 里**，`engine` 只负责起进程。
+两边必须用同一套判据 —— 有过一次教训：各写一套之后，`engine` 自己补了 `Works/`、
+`Downloads/` 这些落点，而 `doctor` 那份只查当前目录和环境变量，于是同一台机器上
+「双击能把引擎拉起来、`sfs doctor` 却说没找到便携包」，最需要自检的场景反而什么都
+查不出来。
+
+改探测逻辑时：
+
+- 候选目录一律从 `doctor.candidate_roots()` 拿，不要另建一份列表。
+- 判断「这套 Python 能不能干活」用 `doctor.has_torch()`；由 exe 推 site-packages 用
+  `doctor.site_packages_of()`，不要手拼 `python_embeded` 路径。目录名有
+  `python_embeded` / `python_embedded` 两种拼写，都走 `EMBEDDED_DIR_ALIASES`。
+- `find_package_root(require_torch=...)` 有两档，别用错：**起服务传 `True`**
+  （找到一套没 torch 的 Python 毫无意义，错误只会被推后成更难懂的
+  `ModuleNotFoundError`）；**自检用默认的 `False`**，这样「torch 缺失」才能被当成
+  一个具体问题报出来，而不是笼统地说「没找到便携包」。
 
 ## 界面文案的禁用词（含一处精确例外）
 

@@ -217,29 +217,162 @@ def check_gpu(report: DoctorReport) -> None:
         )
 
 
-def find_package_root(hint: Optional[str] = None) -> Optional[Path]:
-    """定位 ACE-Step 便携包根目录。
+# -------------------------------------------------------------- 便携包探测
+#
+# 探测逻辑只有这一份：起服务（engine）和报问题（doctor 各项检查）都从这里取
+# 结果。之前两边各写了一套候选目录，慢慢漂移成「引擎自己找得到、自检说没有」，
+# 而且自检那套只认 python_embeded 一个拼写，很难查。
 
-    判定依据：该目录下同时存在 ``python_embeded`` 和 ``acestep``。
+# 便携包里那套 Python 所在目录的名字。上游 ``start_api_server.bat`` 判的是
+# ``python_embedded``，实际解压出来却是 ``python_embeded``（少一个 n）。
+# 两个拼写都认，免得跟着上游一起走错。
+EMBEDDED_DIR_ALIASES = ("python_embeded", "python_embedded")
+
+# Python 可执行文件在便携包里可能出现的位置：Windows 便携包直接放在目录下，
+# 类 Unix 布局在 bin/ 里。
+EMBEDDED_EXE_RELATIVES = (("python.exe",), ("bin", "python3"), ("bin", "python"))
+
+# 便携包根目录里必须有的东西，用来确认「这确实是个便携包」。
+PACKAGE_MARKER = "acestep"
+
+# 便携包常见的落点，相对于用户主目录或各盘根目录。
+EXTRA_ROOT_SUFFIXES = (
+    "ACE-Step-1.5-portable",
+    "Works/ACE-Step-1.5-portable",
+    "AI/ACE-Step-1.5-portable",
+    "Downloads/ACE-Step-1.5-portable",
+)
+
+
+def _search_bases() -> List[Path]:
+    """候选目录的搜索基点：当前目录、用户主目录、各盘根目录。"""
+    bases: List[Path] = [Path.cwd(), Path.home()]
+    for drive in ("C:", "D:", "E:", "F:"):
+        anchor = Path(drive + os.sep)
+        try:
+            if anchor.is_dir():
+                bases.append(anchor)
+        except OSError:
+            continue
+    return bases
+
+
+def candidate_roots(hint: Optional[str] = None) -> List[Path]:
+    """按优先级列出便携包的候选目录，去重保序。
+
+    顺序即优先级：显式指定的 > 当前目录及其上两级 > 环境变量 > 常见落点 >
+    一层 ``ACE-Step*`` 通配。
+
+    只做固定候选加一层通配，**不扫全盘** —— 扫盘会让自检和启动都卡住。
     """
-    candidates: List[Path] = []
+    out: List[Path] = []
 
     if hint:
-        candidates.append(Path(hint))
+        out.append(Path(hint))
 
-    # 当前目录及其上两级
     here = Path.cwd()
-    candidates.extend([here, here.parent, here.parent.parent])
+    out.extend([here, here.parent, here.parent.parent])
 
-    # 环境变量（用户可以在 .env / 系统变量里设）
+    # 环境变量（用户可以在 .env 或系统变量里设）
     for env_key in ("ACESTEP_ROOT", "ACESTEP_HOME", "ACESTEP_PORTABLE_ROOT"):
         value = os.environ.get(env_key)
         if value:
-            candidates.append(Path(value))
+            out.append(Path(value))
 
-    for candidate in candidates:
+    bases = _search_bases()
+    for base in bases:
+        for suffix in EXTRA_ROOT_SUFFIXES:
+            out.append(base / suffix)
+
+    # 一层通配，兜住 ACE-Step-1.5 / ACE-Step-1.6 这类带版本号的目录名
+    for base in bases:
         try:
-            if (candidate / "python_embeded").is_dir() and (candidate / "acestep").is_dir():
+            if base.is_dir():
+                out.extend(sorted(p for p in base.glob("ACE-Step*") if p.is_dir()))
+        except OSError:
+            continue
+
+    unique: List[Path] = []
+    seen = set()
+    for path in out:
+        try:
+            key = str(path.resolve()).lower()
+        except OSError:
+            key = str(path).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def site_packages_of(python_exe: Path) -> List[Path]:
+    """由 Python 可执行文件推出它的 site-packages 可能在哪。
+
+    两种布局都要认：Windows 便携包是 ``python_embeded\\python.exe`` 配
+    ``Lib\\site-packages``；类 Unix 是 ``bin/python3`` 配上一层的
+    ``lib/site-packages``。所以 exe 的同级目录和上一级目录都得看。
+    """
+    out: List[Path] = []
+    for base in dict.fromkeys([python_exe.parent, python_exe.parent.parent]):
+        for name in ("Lib", "lib"):
+            out.append(base / name / "site-packages")
+    return out
+
+
+def has_torch(python_exe: Path) -> bool:
+    """这套 Python 的 site-packages 里有没有 torch。
+
+    只看目录、不起子进程 —— 自检和启动路径上都不该为了它多花几秒去 import。
+    """
+    for site_packages in site_packages_of(python_exe):
+        try:
+            if (site_packages / "torch").is_dir():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def find_embedded_python(
+    package_root: Path,
+    require_torch: bool = False,
+) -> Optional[Path]:
+    """在便携包里找那套 Python。
+
+    :param require_torch: 只认**真能干活**的那套。起服务必须传 ``True``，
+        否则会变成「找到了 Python，一起服务就 ModuleNotFoundError: torch」，
+        比直接说找不到更难查。自检传 ``False``，好把「torch 缺失」当成一个
+        具体问题报出来。
+    """
+    for name in EMBEDDED_DIR_ALIASES:
+        for relative in EMBEDDED_EXE_RELATIVES:
+            exe = package_root.joinpath(name, *relative)
+            try:
+                if exe.is_file() and (not require_torch or has_torch(exe)):
+                    return exe
+            except OSError:
+                continue
+    return None
+
+
+def find_package_root(
+    hint: Optional[str] = None,
+    require_torch: bool = False,
+) -> Optional[Path]:
+    """定位 ACE-Step 便携包根目录。
+
+    判定依据：该目录下有 ``acestep`` 包，并且能找到那套 Python。
+
+    :param require_torch: 只返回能真起服务的那种（``engine`` 走这条）。自检用
+        默认的 ``False``，好把「torch 缺失」单独报出来。
+    """
+    for candidate in candidate_roots(hint):
+        try:
+            if not candidate.is_dir():
+                continue
+            if not (candidate / PACKAGE_MARKER).is_dir():
+                continue
+            if find_embedded_python(candidate, require_torch=require_torch):
                 return candidate.resolve()
         except OSError:
             continue
@@ -248,12 +381,15 @@ def find_package_root(hint: Optional[str] = None) -> Optional[Path]:
 
 def find_site_packages(package_root: Path) -> Optional[Path]:
     """找到便携包内的 site-packages 目录。"""
-    for candidate in (
-        package_root / "python_embeded" / "Lib" / "site-packages",
-        package_root / "python_embeded" / "lib" / "site-packages",
-    ):
-        if candidate.is_dir():
-            return candidate
+    python_exe = find_embedded_python(package_root)
+    if python_exe is None:
+        return None
+    for candidate in site_packages_of(python_exe):
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
     return None
 
 
@@ -263,21 +399,76 @@ def check_package_root(report: DoctorReport, package_root: Optional[Path]) -> No
             "package", "ACE-Step 便携包", LEVEL_SKIP,
             "没找到便携包目录",
             fix=(
-                "如果服务已经起起来了，这一项无所谓。\n"
-                "         要检查 triton 补丁和模型文件，用 --package-root 指定目录，\n"
-                "         例如： --package-root D:\\Works\\ACE-Step-1.5-portable"
+                "服务要是已经起起来了，这一项不影响出歌。\n"
+                "         想让自检接着查 Python、triton 补丁和模型文件，用 --package-root 指一下，例如：\n"
+                "         --package-root D:\\Works\\ACE-Step-1.5-portable\n"
+                "         自检已经自动找过：当前目录及其上两级、用户主目录、各盘根目录，\n"
+                "         以及这些目录下名字带 ACE-Step 的文件夹。"
             ),
         )
         return
 
     report.add("package", "ACE-Step 便携包", LEVEL_OK, str(package_root))
 
-    site_packages = find_site_packages(package_root)
-    if site_packages is None:
+
+def check_embedded_python(report: DoctorReport, package_root: Optional[Path]) -> None:
+    """检查便携包自带的那套 Python —— 真正跑模型的是它，不是上面那个。
+
+    这里有个很容易踩的坑：便携包解压后可能同时躺着一个 uv 建的 ``.venv``，
+    而它是个空壳（没装 torch）。上游 ``start_api_server.bat`` 判目录名时多写了
+    一个 n，永远进不去 ``python_embeded`` 分支，于是退去用那个空壳，最后以
+    ``ModuleNotFoundError: torch`` 收场。所以这一项要明确报出用的是哪一套。
+    """
+    if package_root is None:
         report.add(
-            "package", "site-packages 目录", LEVEL_WARN,
-            f"{package_root} 下没找到 site-packages",
+            "embedded-python", "便携包自带 Python", LEVEL_SKIP,
+            "没找到便携包，跳过了",
         )
+        return
+
+    python_exe = find_embedded_python(package_root)
+    if python_exe is not None:
+        try:
+            label = str(python_exe.relative_to(package_root))
+        except ValueError:
+            label = str(python_exe)
+
+        if has_torch(python_exe):
+            report.add(
+                "embedded-python", "便携包自带 Python", LEVEL_OK,
+                f"{label} ｜ 带 torch",
+            )
+        else:
+            report.add(
+                "embedded-python", "便携包自带 Python", LEVEL_WARN,
+                f"{label} 里没装 torch",
+                fix=(
+                    "这套 Python 起不了服务。多半是便携包没解压完整，\n"
+                    "         重新解压一次官方便携包即可。"
+                ),
+            )
+        return
+
+    # 连个 Python 都没找到，看看是不是只剩那个 .venv 空壳
+    if (package_root / ".venv").is_dir():
+        report.add(
+            "embedded-python", "便携包自带 Python", LEVEL_WARN,
+            "只找到 .venv，那是个空壳",
+            fix=(
+                "上游的 start_api_server.bat 判的目录名是 python_embedded（多一个 n），\n"
+                "         和实际解压出来的 python_embeded 对不上，于是它退去用 .venv —— \n"
+                "         而 .venv 里没装 torch，服务起来就会报 ModuleNotFoundError。\n"
+                "         解决办法：重新解压一次官方便携包；或者用 sfs 一键启动，\n"
+                "         它自己会找对那套 Python。"
+            ),
+        )
+        return
+
+    report.add(
+        "embedded-python", "便携包自带 Python", LEVEL_WARN,
+        f"{package_root} 里没有 python_embeded 目录",
+        fix="重新解压一次官方便携包。",
+    )
 
 
 def check_triton_patch(report: DoctorReport, package_root: Optional[Path]) -> None:
@@ -341,9 +532,12 @@ def check_diffusers_import(report: DoctorReport, package_root: Optional[Path]) -
         report.add("diffusers", "diffusers 导入", LEVEL_SKIP, "不知道便携包在哪")
         return
 
-    python_exe = package_root / "python_embeded" / "python.exe"
-    if not python_exe.exists():
-        report.add("diffusers", "diffusers 导入", LEVEL_SKIP, "便携包里没有 python.exe")
+    python_exe = find_embedded_python(package_root)
+    if python_exe is None:
+        report.add(
+            "diffusers", "diffusers 导入", LEVEL_SKIP,
+            "便携包里没找到可用的 Python",
+        )
         return
 
     try:
@@ -471,6 +665,7 @@ def run_doctor(
     check_service(report, base_url)
     check_gpu(report)
     check_package_root(report, resolved_root)
+    check_embedded_python(report, resolved_root)
     check_triton_patch(report, resolved_root)
     check_diffusers_import(report, resolved_root)
     check_checkpoints(report, resolved_root)
